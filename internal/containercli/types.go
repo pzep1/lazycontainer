@@ -41,6 +41,12 @@ type Container struct {
 	Status        ContainerStatus        `json:"status"`
 }
 
+type ContainerLaunchOptions struct {
+	Name      string
+	Flags     []string
+	Arguments []string
+}
+
 type ContainerConfiguration struct {
 	ID               string        `json:"id"`
 	CreationDate     string        `json:"creationDate"`

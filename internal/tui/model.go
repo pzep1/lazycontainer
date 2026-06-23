@@ -45,8 +45,8 @@ type Client interface {
 	SetDefaultMachine(context.Context, string) error
 	SetMachine(context.Context, string, []string) error
 	PullImage(context.Context, string) error
-	RunImage(context.Context, string, string) error
-	CreateContainer(context.Context, string, string) error
+	RunImage(context.Context, string, containercli.ContainerLaunchOptions) error
+	CreateContainer(context.Context, string, containercli.ContainerLaunchOptions) error
 	BuildImage(context.Context, string, string) error
 	TagImage(context.Context, string, string) error
 	PushImage(context.Context, string) error
@@ -774,40 +774,40 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 	case promptRunImage:
 		image := m.promptTarget
-		name := strings.TrimSpace(m.promptInput)
+		options, ok := parseContainerLaunchInput(m.promptInput)
 		m.prompt = promptNone
 		m.promptInput = ""
 		m.promptTarget = ""
-		if strings.TrimSpace(image) == "" {
+		if strings.TrimSpace(image) == "" || !ok {
 			m.statusLine = "run cancelled"
 			return m, nil
 		}
 		m.busy = "running " + image
 		m.statusLine = "running " + image
 		return m, func() tea.Msg {
-			err := m.client.RunImage(context.Background(), image, name)
+			err := m.client.RunImage(context.Background(), image, options)
 			message := "started container from " + image
-			if name != "" {
+			if name := containerLaunchName(options); name != "" {
 				message = "started " + name
 			}
 			return actionDoneMsg{message: message, err: err}
 		}
 	case promptCreateContainer:
 		image := m.promptTarget
-		name := strings.TrimSpace(m.promptInput)
+		options, ok := parseContainerLaunchInput(m.promptInput)
 		m.prompt = promptNone
 		m.promptInput = ""
 		m.promptTarget = ""
-		if strings.TrimSpace(image) == "" {
+		if strings.TrimSpace(image) == "" || !ok {
 			m.statusLine = "container create cancelled"
 			return m, nil
 		}
 		m.busy = "creating container from " + image
 		m.statusLine = "creating container from " + image
 		return m, func() tea.Msg {
-			err := m.client.CreateContainer(context.Background(), image, name)
+			err := m.client.CreateContainer(context.Background(), image, options)
 			message := "created container from " + image
-			if name != "" {
+			if name := containerLaunchName(options); name != "" {
 				message = "created container " + name
 			}
 			return actionDoneMsg{message: message, err: err}
@@ -1028,6 +1028,263 @@ func parseBuildImageInput(input string) (string, string) {
 		contextDir = "."
 	}
 	return tag, contextDir
+}
+
+func parseContainerLaunchInput(input string) (containercli.ContainerLaunchOptions, bool) {
+	tokens, ok := splitPromptArgs(input)
+	if !ok {
+		return containercli.ContainerLaunchOptions{}, false
+	}
+	options := containercli.ContainerLaunchOptions{}
+	for idx := 0; idx < len(tokens); idx++ {
+		token := tokens[idx]
+		if token == "--" {
+			options.Arguments = append(options.Arguments, tokens[idx+1:]...)
+			return options, true
+		}
+		if name, value, ok := splitLaunchAssignment(token); ok {
+			if name == "name" {
+				options.Name = value
+				continue
+			}
+			if flag, ok := launchAssignmentFlag(name); ok {
+				options.Flags = append(options.Flags, flag, value)
+				continue
+			}
+		}
+		if strings.Contains(token, "=") && !strings.HasPrefix(token, "-") {
+			return containercli.ContainerLaunchOptions{}, false
+		}
+		if flag, ok := launchBooleanFlag(token); ok {
+			options.Flags = append(options.Flags, flag)
+			continue
+		}
+		if launchFlagNeedsValue(token) {
+			if idx+1 >= len(tokens) || tokens[idx+1] == "--" {
+				return containercli.ContainerLaunchOptions{}, false
+			}
+			options.Flags = append(options.Flags, token, tokens[idx+1])
+			idx++
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			options.Flags = append(options.Flags, token)
+			continue
+		}
+		if options.Name == "" {
+			options.Name = token
+			continue
+		}
+		return containercli.ContainerLaunchOptions{}, false
+	}
+	return options, true
+}
+
+func splitPromptArgs(input string) ([]string, bool) {
+	var tokens []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	inToken := false
+
+	for _, r := range input {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			inToken = true
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			inToken = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			current.WriteRune(r)
+			inToken = true
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+			inToken = true
+		case ' ', '\t', '\n', '\r':
+			if inToken {
+				tokens = append(tokens, current.String())
+				current.Reset()
+				inToken = false
+			}
+		default:
+			current.WriteRune(r)
+			inToken = true
+		}
+	}
+	if escaped {
+		current.WriteRune('\\')
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	if inToken {
+		tokens = append(tokens, current.String())
+	}
+	return tokens, true
+}
+
+func splitLaunchAssignment(token string) (string, string, bool) {
+	if strings.HasPrefix(token, "-") {
+		return "", "", false
+	}
+	name, value, ok := strings.Cut(token, "=")
+	if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" {
+		return "", "", false
+	}
+	return strings.ToLower(strings.TrimSpace(name)), value, true
+}
+
+func launchAssignmentFlag(name string) (string, bool) {
+	flags := map[string]string{
+		"a":                        "--arch",
+		"arch":                     "--arch",
+		"c":                        "--cpus",
+		"cap-add":                  "--cap-add",
+		"cap-drop":                 "--cap-drop",
+		"cidfile":                  "--cidfile",
+		"cpus":                     "--cpus",
+		"cwd":                      "--workdir",
+		"dns":                      "--dns",
+		"dns-domain":               "--dns-domain",
+		"dns-option":               "--dns-option",
+		"dns-search":               "--dns-search",
+		"e":                        "--env",
+		"entrypoint":               "--entrypoint",
+		"env":                      "--env",
+		"env-file":                 "--env-file",
+		"gid":                      "--gid",
+		"init-image":               "--init-image",
+		"k":                        "--kernel",
+		"kernel":                   "--kernel",
+		"l":                        "--label",
+		"label":                    "--label",
+		"m":                        "--memory",
+		"max-concurrent-downloads": "--max-concurrent-downloads",
+		"memory":                   "--memory",
+		"mount":                    "--mount",
+		"network":                  "--network",
+		"os":                       "--os",
+		"p":                        "--publish",
+		"platform":                 "--platform",
+		"progress":                 "--progress",
+		"publish":                  "--publish",
+		"publish-socket":           "--publish-socket",
+		"runtime":                  "--runtime",
+		"scheme":                   "--scheme",
+		"shm-size":                 "--shm-size",
+		"tmpfs":                    "--tmpfs",
+		"u":                        "--user",
+		"uid":                      "--uid",
+		"ulimit":                   "--ulimit",
+		"user":                     "--user",
+		"v":                        "--volume",
+		"volume":                   "--volume",
+		"w":                        "--workdir",
+		"workdir":                  "--workdir",
+	}
+	flag, ok := flags[name]
+	return flag, ok
+}
+
+func launchBooleanFlag(token string) (string, bool) {
+	flags := map[string]string{
+		"detach":         "--detach",
+		"init":           "--init",
+		"interactive":    "--interactive",
+		"no-dns":         "--no-dns",
+		"read-only":      "--read-only",
+		"remove":         "--remove",
+		"rm":             "--rm",
+		"rosetta":        "--rosetta",
+		"ssh":            "--ssh",
+		"tty":            "--tty",
+		"virtualization": "--virtualization",
+	}
+	flag, ok := flags[strings.ToLower(token)]
+	return flag, ok
+}
+
+func launchFlagNeedsValue(token string) bool {
+	if strings.Contains(token, "=") {
+		return false
+	}
+	flags := map[string]struct{}{
+		"-a":                         {},
+		"-c":                         {},
+		"-e":                         {},
+		"-k":                         {},
+		"-l":                         {},
+		"-m":                         {},
+		"-p":                         {},
+		"-u":                         {},
+		"-v":                         {},
+		"-w":                         {},
+		"--arch":                     {},
+		"--cap-add":                  {},
+		"--cap-drop":                 {},
+		"--cidfile":                  {},
+		"--cpus":                     {},
+		"--cwd":                      {},
+		"--dns":                      {},
+		"--dns-domain":               {},
+		"--dns-option":               {},
+		"--dns-search":               {},
+		"--entrypoint":               {},
+		"--env":                      {},
+		"--env-file":                 {},
+		"--gid":                      {},
+		"--init-image":               {},
+		"--kernel":                   {},
+		"--label":                    {},
+		"--max-concurrent-downloads": {},
+		"--memory":                   {},
+		"--mount":                    {},
+		"--name":                     {},
+		"--network":                  {},
+		"--os":                       {},
+		"--platform":                 {},
+		"--progress":                 {},
+		"--publish":                  {},
+		"--publish-socket":           {},
+		"--runtime":                  {},
+		"--scheme":                   {},
+		"--shm-size":                 {},
+		"--tmpfs":                    {},
+		"--uid":                      {},
+		"--ulimit":                   {},
+		"--user":                     {},
+		"--volume":                   {},
+		"--workdir":                  {},
+	}
+	_, ok := flags[token]
+	return ok
+}
+
+func containerLaunchName(options containercli.ContainerLaunchOptions) string {
+	for idx, flag := range options.Flags {
+		if flag == "--name" && idx+1 < len(options.Flags) {
+			return strings.TrimSpace(options.Flags[idx+1])
+		}
+		if strings.HasPrefix(flag, "--name=") {
+			return strings.TrimSpace(strings.TrimPrefix(flag, "--name="))
+		}
+	}
+	if strings.TrimSpace(options.Name) != "" {
+		return strings.TrimSpace(options.Name)
+	}
+	return ""
 }
 
 func parseCopyInput(input string, container string) (string, string, bool) {
@@ -1952,9 +2209,9 @@ func (m Model) promptLine() string {
 	case promptPullImage:
 		return "pull image: " + m.promptInput + "  enter pull, esc cancel"
 	case promptRunImage:
-		return "container name for " + m.promptTarget + ": " + m.promptInput + "  enter run, blank auto, esc cancel"
+		return "run opts for " + m.promptTarget + ": " + m.promptInput + "  name=web p=8080:80 env=K=V -- cmd, esc cancel"
 	case promptCreateContainer:
-		return "container name for " + m.promptTarget + ": " + m.promptInput + "  enter create stopped, blank auto, esc cancel"
+		return "create opts for " + m.promptTarget + ": " + m.promptInput + "  name=web p=8080:80 env=K=V -- cmd, esc cancel"
 	case promptBuildImage:
 		return "build image tag [context-dir]: " + m.promptInput + "  enter build, context defaults ., esc cancel"
 	case promptTagImage:

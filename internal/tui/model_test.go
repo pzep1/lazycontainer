@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +17,9 @@ type fakeClient struct {
 	started         string
 	pulled          string
 	runImage        string
-	runName         string
+	runOptions      containercli.ContainerLaunchOptions
 	createImage     string
-	createName      string
+	createOptions   containercli.ContainerLaunchOptions
 	buildTag        string
 	buildContext    string
 	tagSource       string
@@ -276,15 +277,15 @@ func (f *fakeClient) PullImage(_ context.Context, reference string) error {
 	return nil
 }
 
-func (f *fakeClient) RunImage(_ context.Context, image string, name string) error {
+func (f *fakeClient) RunImage(_ context.Context, image string, options containercli.ContainerLaunchOptions) error {
 	f.runImage = image
-	f.runName = name
+	f.runOptions = options
 	return nil
 }
 
-func (f *fakeClient) CreateContainer(_ context.Context, image string, name string) error {
+func (f *fakeClient) CreateContainer(_ context.Context, image string, options containercli.ContainerLaunchOptions) error {
 	f.createImage = image
-	f.createName = name
+	f.createOptions = options
 	return nil
 }
 
@@ -1211,7 +1212,7 @@ func TestPullImagePromptRunsPullAndRefreshes(t *testing.T) {
 	}
 }
 
-func TestRunSelectedImagePromptsForOptionalName(t *testing.T) {
+func TestRunSelectedImagePromptsForLaunchOptions(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
@@ -1226,7 +1227,7 @@ func TestRunSelectedImagePromptsForOptionalName(t *testing.T) {
 	})
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	for _, r := range "scratch" {
+	for _, r := range `name=web p=127.0.0.1:8080:80 env=APP_ENV=dev v=cache:/cache network=frontend -- npm start` {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1242,12 +1243,66 @@ func TestRunSelectedImagePromptsForOptionalName(t *testing.T) {
 	if client.runImage != "docker.io/library/alpine:latest" {
 		t.Fatalf("expected run image target, got %q", client.runImage)
 	}
-	if client.runName != "scratch" {
-		t.Fatalf("expected container name scratch, got %q", client.runName)
+	if client.runOptions.Name != "web" {
+		t.Fatalf("expected container name web, got %q", client.runOptions.Name)
+	}
+	wantFlags := []string{
+		"--publish", "127.0.0.1:8080:80",
+		"--env", "APP_ENV=dev",
+		"--volume", "cache:/cache",
+		"--network", "frontend",
+	}
+	if !reflect.DeepEqual(client.runOptions.Flags, wantFlags) {
+		t.Fatalf("run flags mismatch\nwant: %#v\n got: %#v", wantFlags, client.runOptions.Flags)
+	}
+	wantArgs := []string{"npm", "start"}
+	if !reflect.DeepEqual(client.runOptions.Arguments, wantArgs) {
+		t.Fatalf("run arguments mismatch\nwant: %#v\n got: %#v", wantArgs, client.runOptions.Arguments)
 	}
 }
 
-func TestCreateContainerFromSelectedImagePromptsForOptionalName(t *testing.T) {
+func TestCreateContainerFromSelectedImagePromptsForLaunchOptions(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		images: []containercli.Image{{
+			ID: "abc",
+			Configuration: containercli.ImageConfiguration{
+				Name: "docker.io/library/alpine:latest",
+			},
+		}},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	for _, r := range `--name worker --env "GREETING=hello world" -- /bin/sh -lc "echo ready"` {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected create container command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after create container")
+	}
+
+	if client.createImage != "docker.io/library/alpine:latest" {
+		t.Fatalf("expected create image target, got %q", client.createImage)
+	}
+	wantFlags := []string{"--name", "worker", "--env", "GREETING=hello world"}
+	if !reflect.DeepEqual(client.createOptions.Flags, wantFlags) {
+		t.Fatalf("create flags mismatch\nwant: %#v\n got: %#v", wantFlags, client.createOptions.Flags)
+	}
+	wantArgs := []string{"/bin/sh", "-lc", "echo ready"}
+	if !reflect.DeepEqual(client.createOptions.Arguments, wantArgs) {
+		t.Fatalf("create arguments mismatch\nwant: %#v\n got: %#v", wantArgs, client.createOptions.Arguments)
+	}
+}
+
+func TestCreateContainerStillAcceptsBareName(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
@@ -1265,21 +1320,31 @@ func TestCreateContainerFromSelectedImagePromptsForOptionalName(t *testing.T) {
 	for _, r := range "scratch" {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
-	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatalf("expected create container command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
-	if refresh == nil {
-		t.Fatalf("expected refresh after create container")
-	}
+	_ = cmd().(actionDoneMsg)
 
-	if client.createImage != "docker.io/library/alpine:latest" {
-		t.Fatalf("expected create image target, got %q", client.createImage)
+	if client.createOptions.Name != "scratch" {
+		t.Fatalf("expected bare name scratch, got %q", client.createOptions.Name)
 	}
-	if client.createName != "scratch" {
-		t.Fatalf("expected container name scratch, got %q", client.createName)
+}
+
+func TestParseContainerLaunchInputRejectsUnknownAssignment(t *testing.T) {
+	if _, ok := parseContainerLaunchInput("name=web madeup=value"); ok {
+		t.Fatalf("expected unknown launch assignment to be rejected")
+	}
+}
+
+func TestParseContainerLaunchInputKeepsProgressValue(t *testing.T) {
+	options, ok := parseContainerLaunchInput("--progress plain --name web")
+	if !ok {
+		t.Fatalf("expected launch options to parse")
+	}
+	wantFlags := []string{"--progress", "plain", "--name", "web"}
+	if !reflect.DeepEqual(options.Flags, wantFlags) {
+		t.Fatalf("flags mismatch\nwant: %#v\n got: %#v", wantFlags, options.Flags)
 	}
 }
 

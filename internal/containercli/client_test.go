@@ -644,7 +644,7 @@ func TestRunImageUsesDetachedContainerWithOptionalName(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.RunImage(context.Background(), "docker.io/library/alpine:latest", "scratch"); err != nil {
+	if err := client.RunImage(context.Background(), "docker.io/library/alpine:latest", ContainerLaunchOptions{Name: "scratch"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -658,11 +658,64 @@ func TestCreateContainerUsesSelectedImageWithOptionalName(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.CreateContainer(context.Background(), "docker.io/library/alpine:latest", "scratch"); err != nil {
+	if err := client.CreateContainer(context.Background(), "docker.io/library/alpine:latest", ContainerLaunchOptions{Name: "scratch"}); err != nil {
 		t.Fatal(err)
 	}
 
 	wantArgs := []string{"create", "--name", "scratch", "docker.io/library/alpine:latest"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestRunImageUsesLaunchOptions(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	options := ContainerLaunchOptions{
+		Name: "web",
+		Flags: []string{
+			"--publish", "127.0.0.1:8080:80/tcp",
+			"--env", "GREETING=hello world",
+			"--volume", "cache:/cache",
+			"--network", "frontend",
+			"--workdir", "/app",
+		},
+		Arguments: []string{"npm", "start"},
+	}
+	if err := client.RunImage(context.Background(), "ghcr.io/example/web:latest", options); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{
+		"run", "--detach",
+		"--name", "web",
+		"--publish", "127.0.0.1:8080:80/tcp",
+		"--env", "GREETING=hello world",
+		"--volume", "cache:/cache",
+		"--network", "frontend",
+		"--workdir", "/app",
+		"ghcr.io/example/web:latest",
+		"npm", "start",
+	}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestRunImageDoesNotDuplicateExplicitDetachOrName(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	options := ContainerLaunchOptions{
+		Name:  "ignored",
+		Flags: []string{"--detach", "--name", "web"},
+	}
+	if err := client.RunImage(context.Background(), "ghcr.io/example/web:latest", options); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"run", "--detach", "--name", "web", "ghcr.io/example/web:latest"}
 	if !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
 	}

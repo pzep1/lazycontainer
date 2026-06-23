@@ -290,32 +290,58 @@ func (c *Client) PullImage(ctx context.Context, reference string) error {
 	return err
 }
 
-func (c *Client) RunImage(ctx context.Context, image string, name string) error {
+func (c *Client) RunImage(ctx context.Context, image string, options ContainerLaunchOptions) error {
 	image = strings.TrimSpace(image)
 	if image == "" {
 		return errors.New("image is required")
 	}
-	args := []string{"run", "--detach"}
-	if strings.TrimSpace(name) != "" {
-		args = append(args, "--name", strings.TrimSpace(name))
+	args := []string{"run"}
+	if !hasAnyFlag(options.Flags, "-d", "--detach") {
+		args = append(args, "--detach")
 	}
-	args = append(args, image)
+	args = appendContainerLaunchArgs(args, image, options)
 	_, err := c.runLong(ctx, args...)
 	return err
 }
 
-func (c *Client) CreateContainer(ctx context.Context, image string, name string) error {
+func (c *Client) CreateContainer(ctx context.Context, image string, options ContainerLaunchOptions) error {
 	image = strings.TrimSpace(image)
 	if image == "" {
 		return errors.New("image is required")
 	}
 	args := []string{"create"}
-	if strings.TrimSpace(name) != "" {
-		args = append(args, "--name", strings.TrimSpace(name))
-	}
-	args = append(args, image)
+	args = appendContainerLaunchArgs(args, image, options)
 	_, err := c.runLong(ctx, args...)
 	return err
+}
+
+func appendContainerLaunchArgs(args []string, image string, options ContainerLaunchOptions) []string {
+	if strings.TrimSpace(options.Name) != "" && !hasAnyFlag(options.Flags, "--name") {
+		args = append(args, "--name", strings.TrimSpace(options.Name))
+	}
+	for _, flag := range options.Flags {
+		if strings.TrimSpace(flag) != "" {
+			args = append(args, flag)
+		}
+	}
+	args = append(args, image)
+	for _, argument := range options.Arguments {
+		if strings.TrimSpace(argument) != "" {
+			args = append(args, argument)
+		}
+	}
+	return args
+}
+
+func hasAnyFlag(args []string, names ...string) bool {
+	for _, arg := range args {
+		for _, name := range names {
+			if arg == name || strings.HasPrefix(arg, name+"=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *Client) BuildImage(ctx context.Context, tag string, contextDir string) error {
