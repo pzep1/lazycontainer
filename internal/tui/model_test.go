@@ -37,6 +37,7 @@ type fakeClient struct {
 	logsRead        int
 	execID          string
 	execCommand     string
+	commandArgs     []string
 	machineLogsID   string
 	machineLogsRead int
 	machineShellID  string
@@ -254,6 +255,11 @@ func (f *fakeClient) Exec(_ context.Context, id string, command string) (string,
 	f.execID = id
 	f.execCommand = command
 	return "ok\n", nil
+}
+
+func (f *fakeClient) Command(_ context.Context, args []string) (string, error) {
+	f.commandArgs = append([]string(nil), args...)
+	return "command output\n", nil
 }
 
 func (f *fakeClient) MachineShellCommand(id string) (*exec.Cmd, error) {
@@ -917,6 +923,32 @@ func TestExecCommandShowsSelectedContainerOutput(t *testing.T) {
 	view := updated.View()
 	if !strings.Contains(view, "Exec db") || !strings.Contains(view, "ok") {
 		t.Fatalf("view did not show exec output:\n%s", view)
+	}
+}
+
+func TestContainerCommandPromptRunsAdHocContainerCommand(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	for _, r := range `image list --filter "name=postgres latest"` {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected container command")
+	}
+	output := cmd().(outputMsg)
+	updated, _ = updated.Update(output)
+
+	wantArgs := []string{"image", "list", "--filter", "name=postgres latest"}
+	if !reflect.DeepEqual(client.commandArgs, wantArgs) {
+		t.Fatalf("command args mismatch\nwant: %#v\n got: %#v", wantArgs, client.commandArgs)
+	}
+	view := updated.View()
+	if !strings.Contains(view, "container image list --filter name=postgres latest") || !strings.Contains(view, "command output") {
+		t.Fatalf("view did not show container command output:\n%s", view)
 	}
 }
 

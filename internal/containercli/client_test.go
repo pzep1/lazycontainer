@@ -406,6 +406,48 @@ func TestExecRunsShellCommandInContainer(t *testing.T) {
 	}
 }
 
+func TestCommandRunsArbitraryContainerArgs(t *testing.T) {
+	runner := &fakeRunner{output: []byte("image list\n")}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	output, err := client.Command(context.Background(), []string{"image", "list", "--format", "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "image list\n" {
+		t.Fatalf("unexpected output %q", output)
+	}
+
+	wantArgs := []string{"image", "list", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestCommandRequiresArgs(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if _, err := client.Command(context.Background(), []string{"", "  "}); err == nil {
+		t.Fatalf("expected empty command to fail")
+	}
+}
+
+func TestCommandPreservesEmptyArguments(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	_, err := client.Command(context.Background(), []string{"run", "--env", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"run", "--env", ""}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestRegistryLoginCommandUsesServerAndOptionalUsername(t *testing.T) {
 	client := &Client{Binary: "container"}
 

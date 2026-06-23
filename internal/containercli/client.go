@@ -232,6 +232,14 @@ func (c *Client) Exec(ctx context.Context, id string, command string) (string, e
 	return string(output), err
 }
 
+func (c *Client) Command(ctx context.Context, args []string) (string, error) {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return "", errors.New("container command is required")
+	}
+	output, err := c.runLong(ctx, args...)
+	return string(output), err
+}
+
 func (c *Client) MachineShellCommand(id string) (*exec.Cmd, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, errors.New("machine id is required")

@@ -13,6 +13,7 @@ This is an early usable slice focused on day-to-day container work:
 - filter resource lists across names and metadata
 - inspect selected resources
 - scan container CPU and memory directly in the container list
+- run ad-hoc Apple `container` commands without leaving the TUI
 - view image variant and layer history
 - tail container, machine, or system logs
 - follow container, machine, or system logs in the terminal
@@ -71,6 +72,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `esc` | Clear the active filter |
 | `up` / `k` | Move selection up |
 | `down` / `j` | Move selection down |
+| `:` | Run an ad-hoc Apple `container` command, such as `image list --format json` |
 | `r` | Refresh lists and status |
 | `u` | Toggle periodic auto-refresh |
 | `a` | Pull an image by reference |
