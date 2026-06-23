@@ -18,6 +18,12 @@ The formula intentionally tests `--version` and `--help` so Homebrew can verify 
 The formula declares `depends_on "container"`, but users still need to start Apple's container service before using the TUI:
 
 ```sh
+brew services start container
+```
+
+Or start it manually for the current session:
+
+```sh
 container system start
 ```
 

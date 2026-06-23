@@ -22,6 +22,10 @@ class Lazycont < Formula
       dependency, but you still need to start its system service before
       launching the TUI:
 
+        brew services start container
+
+      Or start it manually for the current session:
+
         container system start
     EOS
   end
