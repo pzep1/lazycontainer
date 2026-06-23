@@ -25,6 +25,7 @@ type fakeClient struct {
 	deletedVolume  string
 	deletedNetwork string
 	deletedMachine string
+	pruned         string
 }
 
 func (f *fakeClient) SystemStatus(context.Context) (containercli.SystemStatus, error) {
@@ -202,6 +203,11 @@ func (f *fakeClient) DeleteMachine(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeClient) PruneContainers(context.Context) error {
+	f.pruned = "containers"
+	return nil
+}
+
 func (f *fakeClient) PruneImages(context.Context, bool) error {
 	return nil
 }
@@ -254,6 +260,28 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 
 	if client.deleted != "db" {
 		t.Fatalf("expected confirmed delete for db, got %q", client.deleted)
+	}
+}
+
+func TestPruneContainersRequiresConfirmation(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(msg)
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if client.pruned != "" {
+		t.Fatalf("prune ran before confirmation")
+	}
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected confirmation command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, _ = updated.Update(done)
+
+	if client.pruned != "containers" {
+		t.Fatalf("expected confirmed container prune, got %q", client.pruned)
 	}
 }
 

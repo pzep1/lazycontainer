@@ -332,3 +332,17 @@ func TestRunImageUsesDetachedContainerWithOptionalName(t *testing.T) {
 		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
 	}
 }
+
+func TestPruneContainersUsesApplePruneCommand(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.PruneContainers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"prune"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}

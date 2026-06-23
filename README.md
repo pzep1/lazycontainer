@@ -14,7 +14,8 @@ This is an early usable slice focused on day-to-day container work:
 - pull images and run selected images as detached containers
 - start, stop, kill, and delete containers
 - stop and delete machines
-- delete or prune images
+- prune stopped containers and unused images, volumes, or networks
+- delete images, volumes, networks, or machines
 - auto-refresh Apple container system status, lists, and one-shot stats
 
 ## Requirements
@@ -55,7 +56,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `x` | Stop selected container or machine |
 | `K` | Kill selected container |
 | `d` | Delete selected container, image, volume, network, or machine, with confirmation |
-| `p` | Prune unused images, volumes, or networks, with confirmation |
+| `p` | Prune stopped containers or unused images, volumes, or networks, with confirmation |
 | `?` | Toggle help |
 | `q` / `ctrl+c` | Quit |
 

@@ -45,6 +45,7 @@ type Client interface {
 	DeleteVolume(context.Context, string) error
 	DeleteNetwork(context.Context, string) error
 	DeleteMachine(context.Context, string) error
+	PruneContainers(context.Context) error
 	PruneImages(context.Context, bool) error
 	PruneVolumes(context.Context) error
 	PruneNetworks(context.Context) error
@@ -73,6 +74,7 @@ type confirmAction int
 const (
 	confirmNone confirmAction = iota
 	confirmDeleteContainer
+	confirmPruneContainers
 	confirmDeleteImage
 	confirmPruneImages
 	confirmDeleteVolume
@@ -364,6 +366,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "p":
 		switch m.active {
+		case resourceContainers:
+			m.confirm = &pendingConfirm{action: confirmPruneContainers, label: "Prune stopped containers?"}
 		case resourceImages:
 			m.confirm = &pendingConfirm{action: confirmPruneImages, label: "Prune unused images?"}
 		case resourceVolumes:
@@ -889,6 +893,9 @@ func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
 		case confirmDeleteContainer:
 			err := m.client.DeleteContainer(ctx, confirm.target, false)
 			return actionDoneMsg{message: "deleted container " + confirm.target, err: err}
+		case confirmPruneContainers:
+			err := m.client.PruneContainers(ctx)
+			return actionDoneMsg{message: "pruned stopped containers", err: err}
 		case confirmDeleteImage:
 			err := m.client.DeleteImage(ctx, confirm.target, false)
 			return actionDoneMsg{message: "deleted image " + confirm.target, err: err}

@@ -269,6 +269,11 @@ func (c *Client) DeleteMachine(ctx context.Context, id string) error {
 	return err
 }
 
+func (c *Client) PruneContainers(ctx context.Context) error {
+	_, err := c.run(ctx, "prune")
+	return err
+}
+
 func (c *Client) PruneImages(ctx context.Context, all bool) error {
 	args := []string{"image", "prune"}
 	if all {
