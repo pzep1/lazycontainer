@@ -16,7 +16,7 @@ This is an early usable slice focused on day-to-day container work:
 - tail container, machine, or system logs
 - follow container, machine, or system logs in the terminal
 - run one-off commands in selected running containers
-- view container CPU, memory, network, disk, and process metrics
+- view container CPU, memory, network, disk, process metrics, and recent metric trends
 - export a selected container filesystem as a tar archive
 - copy files or folders between a selected container and the local filesystem
 - build local images from a Dockerfile or Containerfile

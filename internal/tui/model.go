@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"sort"
 	"strings"
@@ -170,6 +171,7 @@ type Model struct {
 	systemUsage    containercli.SystemDiskUsage
 	systemVersions []containercli.SystemVersion
 	stats          []containercli.Stat
+	statHistory    map[string][]statHistorySample
 	system         containercli.SystemStatus
 
 	panelMode    panelMode
@@ -234,6 +236,20 @@ type followLogsFinishedMsg struct {
 type autoRefreshMsg time.Time
 
 const defaultRefreshInterval = 5 * time.Second
+const maxStatHistorySamples = 24
+
+type statHistorySample struct {
+	cpuPercent   float64
+	hasCPU       bool
+	cpuTimeUsec  float64
+	hasCPUTime   bool
+	memoryBytes  float64
+	hasMemory    bool
+	networkBytes float64
+	hasNetwork   bool
+	blockBytes   float64
+	hasBlock     bool
+}
 
 func New(client Client) Model {
 	return Model{
@@ -269,6 +285,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.systemUsage = msg.systemUsage
 		m.systemVersions = msg.systemVersions
 		m.stats = msg.stats
+		m.recordStatHistory(msg.stats)
+		m.pruneStatHistory(msg.containers)
 		m.err = msg.err
 		m.lastUpdated = msg.updated
 		m.clampCursors()
@@ -2566,6 +2584,10 @@ func (m Model) statLines(containerID string) []string {
 			continue
 		}
 		if lines := stat.SummaryLines(); len(lines) > 0 {
+			if historyLines := m.statHistoryLines(containerID); len(historyLines) > 0 {
+				lines = append(lines, "")
+				lines = append(lines, historyLines...)
+			}
 			return lines
 		}
 		keys := make([]string, 0, len(stat))
@@ -2577,9 +2599,259 @@ func (m Model) statLines(containerID string) []string {
 		for _, key := range keys {
 			lines = append(lines, fmt.Sprintf("  %s: %v", key, stat[key]))
 		}
+		if historyLines := m.statHistoryLines(containerID); len(historyLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, historyLines...)
+		}
 		return lines
 	}
+	return m.statHistoryLines(containerID)
+}
+
+func (m *Model) recordStatHistory(stats []containercli.Stat) {
+	if len(stats) == 0 {
+		return
+	}
+	if m.statHistory == nil {
+		m.statHistory = map[string][]statHistorySample{}
+	}
+	for _, stat := range stats {
+		id := statIdentifier(stat)
+		if id == "" {
+			continue
+		}
+		sample, ok := statHistorySampleFromStat(stat)
+		if !ok {
+			continue
+		}
+		samples := append(m.statHistory[id], sample)
+		if len(samples) > maxStatHistorySamples {
+			samples = samples[len(samples)-maxStatHistorySamples:]
+		}
+		m.statHistory[id] = samples
+	}
+}
+
+func (m *Model) pruneStatHistory(containers []containercli.Container) {
+	if len(m.statHistory) == 0 || len(containers) == 0 {
+		return
+	}
+	known := make(map[string]struct{}, len(containers))
+	for _, container := range containers {
+		if name := strings.TrimSpace(container.Name()); name != "" {
+			known[name] = struct{}{}
+		}
+		if id := strings.TrimSpace(container.ID); id != "" {
+			known[id] = struct{}{}
+		}
+	}
+	for id := range m.statHistory {
+		if _, ok := known[id]; ok {
+			continue
+		}
+		matchesContainer := false
+		for knownID := range known {
+			if strings.Contains(id, knownID) || strings.Contains(knownID, id) {
+				matchesContainer = true
+				break
+			}
+		}
+		if !matchesContainer {
+			delete(m.statHistory, id)
+		}
+	}
+}
+
+func statIdentifier(stat containercli.Stat) string {
+	for _, key := range []string{"id", "ID", "container", "Container", "containerID", "containerId", "name", "Name"} {
+		value, ok := stat[key]
+		if !ok {
+			continue
+		}
+		id := strings.TrimSpace(fmt.Sprint(value))
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func statHistorySampleFromStat(stat containercli.Stat) (statHistorySample, bool) {
+	sample := statHistorySample{}
+	if cpuPercent, ok := firstStatNumber(stat, "cpuPercent", "cpuPercentage", "cpuPercentUsage"); ok {
+		sample.cpuPercent = cpuPercent
+		sample.hasCPU = true
+	}
+	if cpuUsec, ok := statNumber(stat, "cpuUsageUsec"); ok {
+		sample.cpuTimeUsec = cpuUsec
+		sample.hasCPUTime = true
+	}
+	if memory, ok := statNumber(stat, "memoryUsageBytes"); ok {
+		sample.memoryBytes = memory
+		sample.hasMemory = true
+	}
+	rx, hasRx := statNumber(stat, "networkRxBytes")
+	tx, hasTx := statNumber(stat, "networkTxBytes")
+	if hasRx || hasTx {
+		sample.networkBytes = rx + tx
+		sample.hasNetwork = true
+	}
+	read, hasRead := statNumber(stat, "blockReadBytes")
+	write, hasWrite := statNumber(stat, "blockWriteBytes")
+	if hasRead || hasWrite {
+		sample.blockBytes = read + write
+		sample.hasBlock = true
+	}
+	return sample, sample.hasCPU || sample.hasCPUTime || sample.hasMemory || sample.hasNetwork || sample.hasBlock
+}
+
+func firstStatNumber(stat containercli.Stat, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, ok := statNumber(stat, key); ok {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
+func statNumber(stat containercli.Stat, key string) (float64, bool) {
+	value, ok := stat[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case jsonNumber:
+		number, err := v.Float64()
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+type jsonNumber interface {
+	Float64() (float64, error)
+}
+
+func (m Model) statHistoryLines(containerID string) []string {
+	samples := m.statHistoryForContainer(containerID)
+	if len(samples) < 2 {
+		return nil
+	}
+	lines := []string{fmt.Sprintf("  History:  last %d samples", len(samples))}
+	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
+		if sample.hasCPU {
+			return sample.cpuPercent, true
+		}
+		return 0, false
+	}); ok {
+		lines = append(lines, fmt.Sprintf("  CPU %%:    %s", asciiSparkline(values)))
+	} else if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
+		if sample.hasCPUTime {
+			return sample.cpuTimeUsec, true
+		}
+		return 0, false
+	}); ok {
+		lines = append(lines, fmt.Sprintf("  CPU time: %s", asciiSparkline(values)))
+	}
+	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
+		if sample.hasMemory {
+			return sample.memoryBytes, true
+		}
+		return 0, false
+	}); ok {
+		lines = append(lines, fmt.Sprintf("  Memory:   %s", asciiSparkline(values)))
+	}
+	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
+		if sample.hasNetwork {
+			return sample.networkBytes, true
+		}
+		return 0, false
+	}); ok {
+		lines = append(lines, fmt.Sprintf("  Network:  %s", asciiSparkline(values)))
+	}
+	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
+		if sample.hasBlock {
+			return sample.blockBytes, true
+		}
+		return 0, false
+	}); ok {
+		lines = append(lines, fmt.Sprintf("  Block IO: %s", asciiSparkline(values)))
+	}
+	if len(lines) == 1 {
+		return nil
+	}
+	return lines
+}
+
+func (m Model) statHistoryForContainer(containerID string) []statHistorySample {
+	if len(m.statHistory) == 0 || strings.TrimSpace(containerID) == "" {
+		return nil
+	}
+	if samples := m.statHistory[containerID]; len(samples) > 0 {
+		return samples
+	}
+	keys := make([]string, 0, len(m.statHistory))
+	for key := range m.statHistory {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if strings.Contains(key, containerID) || strings.Contains(containerID, key) {
+			return m.statHistory[key]
+		}
+	}
 	return nil
+}
+
+func historyValues(samples []statHistorySample, valueFor func(statHistorySample) (float64, bool)) ([]float64, bool) {
+	values := make([]float64, 0, len(samples))
+	for _, sample := range samples {
+		value, ok := valueFor(sample)
+		if !ok {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values, len(values) >= 2
+}
+
+func asciiSparkline(values []float64) string {
+	if len(values) == 0 {
+		return ""
+	}
+	const marks = ".:-=+*#%@"
+	minimum := values[0]
+	maximum := values[0]
+	for _, value := range values[1:] {
+		minimum = math.Min(minimum, value)
+		maximum = math.Max(maximum, value)
+	}
+	if maximum == minimum {
+		return strings.Repeat("-", len(values))
+	}
+	var out strings.Builder
+	for _, value := range values {
+		ratio := (value - minimum) / (maximum - minimum)
+		index := int(math.Round(ratio * float64(len(marks)-1)))
+		if index < 0 {
+			index = 0
+		}
+		if index >= len(marks) {
+			index = len(marks) - 1
+		}
+		out.WriteByte(marks[index])
+	}
+	return out.String()
 }
 
 func (m Model) filteredContainerIndexes() []int {

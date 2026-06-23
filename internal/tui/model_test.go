@@ -494,6 +494,64 @@ func TestContainerDetailsShowMetricSummary(t *testing.T) {
 	}
 }
 
+func TestContainerDetailsShowMetricHistory(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+		},
+		stats: []containercli.Stat{{
+			"id":               "web",
+			"cpuPercent":       float64(10),
+			"memoryUsageBytes": float64(10 * 1024 * 1024),
+			"memoryLimitBytes": float64(100 * 1024 * 1024),
+			"networkRxBytes":   float64(1000),
+			"networkTxBytes":   float64(2000),
+			"blockReadBytes":   float64(3000),
+			"blockWriteBytes":  float64(4000),
+		}},
+	})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+		},
+		stats: []containercli.Stat{{
+			"id":               "web",
+			"cpuPercent":       float64(80),
+			"memoryUsageBytes": float64(60 * 1024 * 1024),
+			"memoryLimitBytes": float64(100 * 1024 * 1024),
+			"networkRxBytes":   float64(5000),
+			"networkTxBytes":   float64(7000),
+			"blockReadBytes":   float64(9000),
+			"blockWriteBytes":  float64(11000),
+		}},
+	})
+
+	view := updated.View()
+	for _, want := range []string{"History:  last 2 samples", "CPU %:    .@", "Memory:   .@", "Network:  .@", "Block IO: .@"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view did not include %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestStatHistoryIsBounded(t *testing.T) {
+	model := New(&fakeClient{})
+	for idx := 0; idx < maxStatHistorySamples+5; idx++ {
+		model.recordStatHistory([]containercli.Stat{{
+			"id":         "web",
+			"cpuPercent": float64(idx),
+		}})
+	}
+
+	if got := len(model.statHistory["web"]); got != maxStatHistorySamples {
+		t.Fatalf("history length = %d, want %d", got, maxStatHistorySamples)
+	}
+}
+
 func TestImageDetailsShowLayerHistory(t *testing.T) {
 	model := New(&fakeClient{})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 130, Height: 30})
