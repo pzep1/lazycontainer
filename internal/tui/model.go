@@ -2339,7 +2339,7 @@ func (m Model) renderContainerList(width int, height int) []string {
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("containers"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("name", "state", width))}
+	rows := []string{mutedStyle.Render(fitColumns("name", "state / cpu / mem", width))}
 	start := visibleStart(m.containerCursor, height-1, len(indexes))
 	end := start + height - 1
 	if end > len(indexes) {
@@ -2350,6 +2350,9 @@ func (m Model) renderContainerList(width int, height int) []string {
 		container := m.containers[indexes[idx]]
 		name := truncate(container.Name(), 22)
 		meta := fmt.Sprintf("%s  %s", container.State(), container.CreatedAgo(now))
+		if summary := m.statListSummary(container.Name()); summary != "" {
+			meta = fmt.Sprintf("%s  %s", container.State(), summary)
+		}
 		line := fitColumns(name, meta, width)
 		if idx == m.containerCursor {
 			line = selectedStyle.Width(width).Render(truncate(line, width))
@@ -2623,6 +2626,16 @@ func (m Model) statLines(containerID string) []string {
 		return lines
 	}
 	return m.statHistoryLines(containerID)
+}
+
+func (m Model) statListSummary(containerID string) string {
+	for _, stat := range m.stats {
+		if !statMatches(stat, containerID) {
+			continue
+		}
+		return stat.ListSummary()
+	}
+	return ""
 }
 
 func (m *Model) recordStatHistory(stats []containercli.Stat) {

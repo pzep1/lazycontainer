@@ -581,6 +581,24 @@ func (s Stat) SummaryLines() []string {
 	return lines
 }
 
+func (s Stat) ListSummary() string {
+	parts := []string{}
+	if cpuPercent, ok := firstNumberFromMap(s, "cpuPercent", "cpuPercentage", "cpuPercentUsage"); ok {
+		parts = append(parts, formatPercent(cpuPercent)+" cpu")
+	} else if cpuUsec, ok := numberFromMap(s, "cpuUsageUsec"); ok {
+		parts = append(parts, formatUsec(cpuUsec)+" cpu")
+	}
+	memoryUsage, hasMemoryUsage := numberFromMap(s, "memoryUsageBytes")
+	memoryLimit, hasMemoryLimit := numberFromMap(s, "memoryLimitBytes")
+	switch {
+	case hasMemoryUsage && hasMemoryLimit && memoryLimit > 0:
+		parts = append(parts, formatPercent(memoryUsage/memoryLimit*100)+" mem")
+	case hasMemoryUsage:
+		parts = append(parts, FormatBytes(int64(memoryUsage))+" mem")
+	}
+	return strings.Join(parts, "  ")
+}
+
 func FormatBytes(bytes int64) string {
 	if bytes <= 0 {
 		return "-"

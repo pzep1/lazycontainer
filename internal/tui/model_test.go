@@ -500,6 +500,30 @@ func TestContainerDetailsShowMetricSummary(t *testing.T) {
 	}
 }
 
+func TestContainerListShowsMetricSummary(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 130, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+		},
+		stats: []containercli.Stat{{
+			"id":               "web",
+			"cpuPercent":       float64(12.34),
+			"memoryUsageBytes": float64(47431680),
+			"memoryLimitBytes": float64(1073741824),
+		}},
+	})
+
+	view := updated.View()
+	for _, want := range []string{"state / cpu / mem", "12.3% cpu", "4.4% mem"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view did not include %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestContainerDetailsShowMetricHistory(t *testing.T) {
 	model := New(&fakeClient{})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})

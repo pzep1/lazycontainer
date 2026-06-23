@@ -12,6 +12,7 @@ This is an early usable slice focused on day-to-day container work:
 - browse Apple container system diagnostics
 - filter resource lists across names and metadata
 - inspect selected resources
+- scan container CPU and memory directly in the container list
 - view image variant and layer history
 - tail container, machine, or system logs
 - follow container, machine, or system logs in the terminal

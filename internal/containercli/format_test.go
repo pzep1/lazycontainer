@@ -50,6 +50,41 @@ func TestStatSummaryLinesShowsCPUPercentWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestStatListSummaryFormatsCompactCPUAndMemory(t *testing.T) {
+	stat := Stat{
+		"id":               "web",
+		"cpuPercent":       float64(12.34),
+		"memoryUsageBytes": float64(47431680),
+		"memoryLimitBytes": float64(1073741824),
+	}
+
+	if got, want := stat.ListSummary(), "12.3% cpu  4.4% mem"; got != want {
+		t.Fatalf("list summary = %q, want %q", got, want)
+	}
+}
+
+func TestStatListSummaryShowsMemoryBytesWithoutLimit(t *testing.T) {
+	stat := Stat{
+		"id":               "web",
+		"memoryUsageBytes": float64(47431680),
+	}
+
+	if got, want := stat.ListSummary(), "45.2 MB mem"; got != want {
+		t.Fatalf("list summary = %q, want %q", got, want)
+	}
+}
+
+func TestStatListSummaryShowsCPUTimeWhenPercentUnavailable(t *testing.T) {
+	stat := Stat{
+		"id":           "web",
+		"cpuUsageUsec": float64(1234567),
+	}
+
+	if got, want := stat.ListSummary(), "1.2s cpu"; got != want {
+		t.Fatalf("list summary = %q, want %q", got, want)
+	}
+}
+
 func TestImageLayerHistoryLinesFormatsVerboseImageShape(t *testing.T) {
 	image := Image{
 		Configuration: ImageConfiguration{Name: "docker.io/library/alpine:latest"},
