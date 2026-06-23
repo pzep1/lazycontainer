@@ -1,6 +1,8 @@
 class Lazycont < Formula
   desc "Lazydocker-style terminal UI for Apple's container CLI"
   homepage "https://github.com/pzep1/lazycont"
+  url "https://github.com/pzep1/lazycont/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "5ca3c01d08a2b1afc9c4be0bcd194d436baadf3baf3633c4828038bbb83e8e26"
   license "GPL-3.0-or-later"
   head "https://github.com/pzep1/lazycont.git", branch: "main"
 
