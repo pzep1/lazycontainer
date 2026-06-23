@@ -669,11 +669,15 @@ func TestFollowLogsCommandUsesFollowWithTail(t *testing.T) {
 }
 
 func TestPullImageUsesPlainProgress(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{output: []byte("pull output\n")}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.PullImage(context.Background(), "docker.io/library/alpine:latest"); err != nil {
+	output, err := client.PullImage(context.Background(), "docker.io/library/alpine:latest")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if output != "pull output\n" {
+		t.Fatalf("expected pull output, got %q", output)
 	}
 
 	wantArgs := []string{"image", "pull", "--progress", "plain", "docker.io/library/alpine:latest"}
@@ -764,11 +768,15 @@ func TestRunImageDoesNotDuplicateExplicitDetachOrName(t *testing.T) {
 }
 
 func TestBuildImageUsesPlainProgressAndDefaultContext(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{output: []byte("build output\n")}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.BuildImage(context.Background(), "registry.example.com/app:dev", ""); err != nil {
+	output, err := client.BuildImage(context.Background(), "registry.example.com/app:dev", "")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if output != "build output\n" {
+		t.Fatalf("expected build output, got %q", output)
 	}
 
 	wantArgs := []string{"build", "--progress", "plain", "--tag", "registry.example.com/app:dev", "."}
@@ -778,11 +786,15 @@ func TestBuildImageUsesPlainProgressAndDefaultContext(t *testing.T) {
 }
 
 func TestBuildImageUsesProvidedContext(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{output: []byte("build output\n")}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.BuildImage(context.Background(), "registry.example.com/app:dev", "./services/api"); err != nil {
+	output, err := client.BuildImage(context.Background(), "registry.example.com/app:dev", "./services/api")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if output != "build output\n" {
+		t.Fatalf("expected build output, got %q", output)
 	}
 
 	wantArgs := []string{"build", "--progress", "plain", "--tag", "registry.example.com/app:dev", "./services/api"}
@@ -806,11 +818,15 @@ func TestTagImageUsesSelectedSourceAndTargetReference(t *testing.T) {
 }
 
 func TestPushImageUsesPlainProgress(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{output: []byte("push output\n")}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.PushImage(context.Background(), "registry.example.com/alpine:dev"); err != nil {
+	output, err := client.PushImage(context.Background(), "registry.example.com/alpine:dev")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if output != "push output\n" {
+		t.Fatalf("expected push output, got %q", output)
 	}
 
 	wantArgs := []string{"image", "push", "--progress", "plain", "registry.example.com/alpine:dev"}
@@ -820,11 +836,15 @@ func TestPushImageUsesPlainProgress(t *testing.T) {
 }
 
 func TestSaveImageUsesOutputPath(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{output: []byte("save output\n")}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.SaveImage(context.Background(), "docker.io/library/alpine:latest", "alpine.tar"); err != nil {
+	output, err := client.SaveImage(context.Background(), "docker.io/library/alpine:latest", "alpine.tar")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if output != "save output\n" {
+		t.Fatalf("expected save output, got %q", output)
 	}
 
 	wantArgs := []string{"image", "save", "--output", "alpine.tar", "docker.io/library/alpine:latest"}
@@ -834,11 +854,15 @@ func TestSaveImageUsesOutputPath(t *testing.T) {
 }
 
 func TestLoadImageUsesInputPath(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{output: []byte("load output\n")}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
 
-	if err := client.LoadImage(context.Background(), "alpine.tar"); err != nil {
+	output, err := client.LoadImage(context.Background(), "alpine.tar")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if output != "load output\n" {
+		t.Fatalf("expected load output, got %q", output)
 	}
 
 	wantArgs := []string{"image", "load", "--input", "alpine.tar"}

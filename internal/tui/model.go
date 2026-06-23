@@ -47,14 +47,14 @@ type Client interface {
 	CreateMachine(context.Context, string, string) error
 	SetDefaultMachine(context.Context, string) error
 	SetMachine(context.Context, string, []string) error
-	PullImage(context.Context, string) error
+	PullImage(context.Context, string) (string, error)
 	RunImage(context.Context, string, containercli.ContainerLaunchOptions) error
 	CreateContainer(context.Context, string, containercli.ContainerLaunchOptions) error
-	BuildImage(context.Context, string, string) error
+	BuildImage(context.Context, string, string) (string, error)
 	TagImage(context.Context, string, string) error
-	PushImage(context.Context, string) error
-	SaveImage(context.Context, string, string) error
-	LoadImage(context.Context, string) error
+	PushImage(context.Context, string) (string, error)
+	SaveImage(context.Context, string, string) (string, error)
+	LoadImage(context.Context, string) (string, error)
 	RegistryLoginCommand(string, string) (*exec.Cmd, error)
 	LogoutRegistry(context.Context, string) error
 	StartBuilder(context.Context) error
@@ -234,9 +234,10 @@ type snapshotMsg struct {
 }
 
 type outputMsg struct {
-	title string
-	body  string
-	err   error
+	title   string
+	body    string
+	err     error
+	refresh bool
 }
 
 type actionDoneMsg struct {
@@ -346,6 +347,10 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.panelBody = msg.body
 		m.panelOffset = 0
 		m.statusLine = "loaded " + strings.ToLower(msg.title)
+		if msg.refresh {
+			m.busy = "refreshing"
+			return m, m.refreshCmd()
+		}
 		return m, nil
 	case actionDoneMsg:
 		m.busy = "refreshing"
@@ -1074,9 +1079,10 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "pulling " + reference
 		m.statusLine = "pulling " + reference
+		m.panelMode = panelInspect
 		return m, func() tea.Msg {
-			err := m.client.PullImage(context.Background(), reference)
-			return actionDoneMsg{message: "pulled image " + reference, err: err}
+			body, err := m.client.PullImage(context.Background(), reference)
+			return outputMsg{title: "Pull " + reference, body: commandOutputBody(body), err: err, refresh: true}
 		}
 	case promptRunImage:
 		image := m.promptTarget
@@ -1129,9 +1135,10 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "building " + tag
 		m.statusLine = "building " + tag
+		m.panelMode = panelInspect
 		return m, func() tea.Msg {
-			err := m.client.BuildImage(context.Background(), tag, contextDir)
-			return actionDoneMsg{message: "built image " + tag, err: err}
+			body, err := m.client.BuildImage(context.Background(), tag, contextDir)
+			return outputMsg{title: "Build " + tag, body: commandOutputBody(body), err: err, refresh: true}
 		}
 	case promptTagImage:
 		source := m.promptTarget
@@ -1243,10 +1250,7 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.Command(context.Background(), args)
-			if strings.TrimSpace(body) == "" && err == nil {
-				body = "Command completed with no output."
-			}
-			return outputMsg{title: title, body: body, err: err}
+			return outputMsg{title: title, body: commandOutputBody(body), err: err}
 		}
 	case promptSaveImage:
 		reference := m.promptTarget
@@ -1260,9 +1264,10 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "saving image " + reference
 		m.statusLine = "saving image " + reference
+		m.panelMode = panelInspect
 		return m, func() tea.Msg {
-			err := m.client.SaveImage(context.Background(), reference, outputPath)
-			return actionDoneMsg{message: "saved image " + reference + " to " + outputPath, err: err}
+			body, err := m.client.SaveImage(context.Background(), reference, outputPath)
+			return outputMsg{title: "Save " + reference, body: commandOutputBody(body), err: err, refresh: true}
 		}
 	case promptLoadImage:
 		inputPath := strings.TrimSpace(m.promptInput)
@@ -1275,9 +1280,10 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "loading image archive"
 		m.statusLine = "loading image archive"
+		m.panelMode = panelInspect
 		return m, func() tea.Msg {
-			err := m.client.LoadImage(context.Background(), inputPath)
-			return actionDoneMsg{message: "loaded image archive " + inputPath, err: err}
+			body, err := m.client.LoadImage(context.Background(), inputPath)
+			return outputMsg{title: "Load " + inputPath, body: commandOutputBody(body), err: err, refresh: true}
 		}
 	case promptRegistryLogin:
 		server, username, ok := parseRegistryLoginInput(m.promptInput)
@@ -1718,6 +1724,13 @@ func defaultImageArchivePath(reference string) string {
 	}
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_", "@", "_")
 	return replacer.Replace(name) + ".tar"
+}
+
+func commandOutputBody(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return "Command completed with no output."
+	}
+	return body
 }
 
 func (m Model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
@@ -2169,9 +2182,10 @@ func (m Model) pushSelectedImage() (tea.Model, tea.Cmd) {
 	}
 	m.busy = "pushing " + reference
 	m.statusLine = "pushing " + reference
+	m.panelMode = panelInspect
 	return m, func() tea.Msg {
-		err := m.client.PushImage(context.Background(), reference)
-		return actionDoneMsg{message: "pushed image " + reference, err: err}
+		body, err := m.client.PushImage(context.Background(), reference)
+		return outputMsg{title: "Push " + reference, body: commandOutputBody(body), err: err, refresh: true}
 	}
 }
 

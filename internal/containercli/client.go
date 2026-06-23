@@ -289,13 +289,13 @@ func (c *Client) SetMachine(ctx context.Context, id string, settings []string) e
 	return err
 }
 
-func (c *Client) PullImage(ctx context.Context, reference string) error {
+func (c *Client) PullImage(ctx context.Context, reference string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
-		return errors.New("image reference is required")
+		return "", errors.New("image reference is required")
 	}
-	_, err := c.runLong(ctx, "image", "pull", "--progress", "plain", reference)
-	return err
+	output, err := c.runLong(ctx, "image", "pull", "--progress", "plain", reference)
+	return string(output), err
 }
 
 func (c *Client) RunImage(ctx context.Context, image string, options ContainerLaunchOptions) error {
@@ -352,17 +352,17 @@ func hasAnyFlag(args []string, names ...string) bool {
 	return false
 }
 
-func (c *Client) BuildImage(ctx context.Context, tag string, contextDir string) error {
+func (c *Client) BuildImage(ctx context.Context, tag string, contextDir string) (string, error) {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
-		return errors.New("image tag is required")
+		return "", errors.New("image tag is required")
 	}
 	contextDir = strings.TrimSpace(contextDir)
 	if contextDir == "" {
 		contextDir = "."
 	}
-	_, err := c.runLong(ctx, "build", "--progress", "plain", "--tag", tag, contextDir)
-	return err
+	output, err := c.runLong(ctx, "build", "--progress", "plain", "--tag", tag, contextDir)
+	return string(output), err
 }
 
 func (c *Client) TagImage(ctx context.Context, source string, target string) error {
@@ -378,35 +378,35 @@ func (c *Client) TagImage(ctx context.Context, source string, target string) err
 	return err
 }
 
-func (c *Client) PushImage(ctx context.Context, reference string) error {
+func (c *Client) PushImage(ctx context.Context, reference string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
-		return errors.New("image reference is required")
+		return "", errors.New("image reference is required")
 	}
-	_, err := c.runLong(ctx, "image", "push", "--progress", "plain", reference)
-	return err
+	output, err := c.runLong(ctx, "image", "push", "--progress", "plain", reference)
+	return string(output), err
 }
 
-func (c *Client) SaveImage(ctx context.Context, reference string, outputPath string) error {
+func (c *Client) SaveImage(ctx context.Context, reference string, outputPath string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
-		return errors.New("image reference is required")
+		return "", errors.New("image reference is required")
 	}
 	outputPath = strings.TrimSpace(outputPath)
 	if outputPath == "" {
-		return errors.New("image archive path is required")
+		return "", errors.New("image archive path is required")
 	}
-	_, err := c.runLong(ctx, "image", "save", "--output", outputPath, reference)
-	return err
+	output, err := c.runLong(ctx, "image", "save", "--output", outputPath, reference)
+	return string(output), err
 }
 
-func (c *Client) LoadImage(ctx context.Context, inputPath string) error {
+func (c *Client) LoadImage(ctx context.Context, inputPath string) (string, error) {
 	inputPath = strings.TrimSpace(inputPath)
 	if inputPath == "" {
-		return errors.New("image archive path is required")
+		return "", errors.New("image archive path is required")
 	}
-	_, err := c.runLong(ctx, "image", "load", "--input", inputPath)
-	return err
+	output, err := c.runLong(ctx, "image", "load", "--input", inputPath)
+	return string(output), err
 }
 
 func (c *Client) RegistryLoginCommand(server string, username string) (*exec.Cmd, error) {

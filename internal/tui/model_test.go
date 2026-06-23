@@ -285,9 +285,9 @@ func (f *fakeClient) SetMachine(_ context.Context, id string, settings []string)
 	return nil
 }
 
-func (f *fakeClient) PullImage(_ context.Context, reference string) error {
+func (f *fakeClient) PullImage(_ context.Context, reference string) (string, error) {
 	f.pulled = reference
-	return nil
+	return "pull output\n", nil
 }
 
 func (f *fakeClient) RunImage(_ context.Context, image string, options containercli.ContainerLaunchOptions) error {
@@ -302,10 +302,10 @@ func (f *fakeClient) CreateContainer(_ context.Context, image string, options co
 	return nil
 }
 
-func (f *fakeClient) BuildImage(_ context.Context, tag string, contextDir string) error {
+func (f *fakeClient) BuildImage(_ context.Context, tag string, contextDir string) (string, error) {
 	f.buildTag = tag
 	f.buildContext = contextDir
-	return nil
+	return "build output\n", nil
 }
 
 func (f *fakeClient) TagImage(_ context.Context, source string, target string) error {
@@ -314,20 +314,20 @@ func (f *fakeClient) TagImage(_ context.Context, source string, target string) e
 	return nil
 }
 
-func (f *fakeClient) PushImage(_ context.Context, reference string) error {
+func (f *fakeClient) PushImage(_ context.Context, reference string) (string, error) {
 	f.pushed = reference
-	return nil
+	return "push output\n", nil
 }
 
-func (f *fakeClient) SaveImage(_ context.Context, reference string, outputPath string) error {
+func (f *fakeClient) SaveImage(_ context.Context, reference string, outputPath string) (string, error) {
 	f.savedImage = reference
 	f.saveOutput = outputPath
-	return nil
+	return "save output\n", nil
 }
 
-func (f *fakeClient) LoadImage(_ context.Context, inputPath string) error {
+func (f *fakeClient) LoadImage(_ context.Context, inputPath string) (string, error) {
 	f.loadedImage = inputPath
-	return nil
+	return "load output\n", nil
 }
 
 func (f *fakeClient) RegistryLoginCommand(server string, username string) (*exec.Cmd, error) {
@@ -1706,8 +1706,11 @@ func TestPullImagePromptRunsPullAndRefreshes(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected pull command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
+	output := cmd().(outputMsg)
+	if !strings.Contains(output.body, "pull output") {
+		t.Fatalf("expected pull output body, got %q", output.body)
+	}
+	updated, refresh := updated.Update(output)
 	if refresh == nil {
 		t.Fatalf("expected refresh after pull")
 	}
@@ -1866,8 +1869,11 @@ func TestBuildImagePromptBuildsWithDefaultContext(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected build command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
+	output := cmd().(outputMsg)
+	if !strings.Contains(output.body, "build output") {
+		t.Fatalf("expected build output body, got %q", output.body)
+	}
+	updated, refresh := updated.Update(output)
 	if refresh == nil {
 		t.Fatalf("expected refresh after build")
 	}
@@ -1893,8 +1899,11 @@ func TestBuildImagePromptBuildsWithProvidedContext(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected build command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
+	output := cmd().(outputMsg)
+	if !strings.Contains(output.body, "build output") {
+		t.Fatalf("expected build output body, got %q", output.body)
+	}
+	updated, refresh := updated.Update(output)
 	if refresh == nil {
 		t.Fatalf("expected refresh after build")
 	}
@@ -1961,8 +1970,11 @@ func TestPushSelectedImageUsesImageReference(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected push image command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
+	output := cmd().(outputMsg)
+	if !strings.Contains(output.body, "push output") {
+		t.Fatalf("expected push output body, got %q", output.body)
+	}
+	updated, refresh := updated.Update(output)
 	if refresh == nil {
 		t.Fatalf("expected refresh after push")
 	}
@@ -1994,8 +2006,11 @@ func TestSaveSelectedImageUsesDefaultArchivePath(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected save image command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
+	output := cmd().(outputMsg)
+	if !strings.Contains(output.body, "save output") {
+		t.Fatalf("expected save output body, got %q", output.body)
+	}
+	updated, refresh := updated.Update(output)
 	if refresh == nil {
 		t.Fatalf("expected refresh after save")
 	}
@@ -2022,8 +2037,11 @@ func TestLoadImageArchivePromptUsesInputPath(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected load image command")
 	}
-	done := cmd().(actionDoneMsg)
-	updated, refresh := updated.Update(done)
+	output := cmd().(outputMsg)
+	if !strings.Contains(output.body, "load output") {
+		t.Fatalf("expected load output body, got %q", output.body)
+	}
+	updated, refresh := updated.Update(output)
 	if refresh == nil {
 		t.Fatalf("expected refresh after load")
 	}
