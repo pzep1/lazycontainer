@@ -100,6 +100,9 @@ type Model struct {
 	panelBody   string
 	panelOffset int
 	showHelp    bool
+	filter      string
+	filterInput string
+	filtering   bool
 
 	busy        string
 	statusLine  string
@@ -216,10 +219,30 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirm != nil {
 		return m.handleConfirmKey(key)
 	}
+	if m.filtering {
+		return m.handleFilterKey(msg)
+	}
 
 	switch key {
 	case "ctrl+c", "q":
 		return m, tea.Quit
+	case "/":
+		return m.startFiltering(), nil
+	case "esc":
+		if m.filter != "" {
+			m.filter = ""
+			m.filterInput = ""
+			m.clampCursors()
+			m.resetPanel()
+			m.statusLine = "filter cleared"
+		}
+		return m, nil
+	}
+	if keyRune(msg) == "/" {
+		return m.startFiltering(), nil
+	}
+
+	switch key {
 	case "?":
 		m.showHelp = !m.showHelp
 		return m, nil
@@ -280,6 +303,56 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirm = &pendingConfirm{action: confirmPruneNetworks, label: "Prune unused networks?"}
 		}
 		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) startFiltering() Model {
+	m.filtering = true
+	m.filterInput = m.filter
+	m.statusLine = "filtering"
+	return m
+}
+
+func keyRune(msg tea.KeyMsg) string {
+	if msg.Type != tea.KeyRunes {
+		return ""
+	}
+	return string(msg.Runes)
+}
+
+func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "enter":
+		m.filtering = false
+		m.filter = strings.TrimSpace(m.filterInput)
+		m.clampCursors()
+		m.resetPanel()
+		if m.filter == "" {
+			m.statusLine = "filter cleared"
+		} else {
+			m.statusLine = "filter applied"
+		}
+		return m, nil
+	case "esc":
+		m.filtering = false
+		m.filterInput = m.filter
+		m.statusLine = "filter cancelled"
+		return m, nil
+	case "backspace", "ctrl+h":
+		if len(m.filterInput) > 0 {
+			m.filterInput = m.filterInput[:len(m.filterInput)-1]
+		}
+		return m, nil
+	case "ctrl+u":
+		m.filterInput = ""
+		return m, nil
+	}
+
+	if msg.Type == tea.KeyRunes {
+		m.filterInput += string(msg.Runes)
 	}
 	return m, nil
 }
@@ -543,10 +616,10 @@ func (m *Model) moveSelection(delta int) {
 }
 
 func (m *Model) clampCursors() {
-	m.containerCursor = clamp(m.containerCursor, 0, len(m.containers)-1)
-	m.imageCursor = clamp(m.imageCursor, 0, len(m.images)-1)
-	m.volumeCursor = clamp(m.volumeCursor, 0, len(m.volumes)-1)
-	m.networkCursor = clamp(m.networkCursor, 0, len(m.networks)-1)
+	m.containerCursor = clamp(m.containerCursor, 0, len(m.filteredContainerIndexes())-1)
+	m.imageCursor = clamp(m.imageCursor, 0, len(m.filteredImageIndexes())-1)
+	m.volumeCursor = clamp(m.volumeCursor, 0, len(m.filteredVolumeIndexes())-1)
+	m.networkCursor = clamp(m.networkCursor, 0, len(m.filteredNetworkIndexes())-1)
 }
 
 func (m *Model) resetPanel() {
@@ -562,31 +635,35 @@ func (m *Model) scrollPanel(delta int) {
 }
 
 func (m Model) selectedContainer() (containercli.Container, bool) {
-	if len(m.containers) == 0 || m.containerCursor < 0 || m.containerCursor >= len(m.containers) {
+	indexes := m.filteredContainerIndexes()
+	if len(indexes) == 0 || m.containerCursor < 0 || m.containerCursor >= len(indexes) {
 		return containercli.Container{}, false
 	}
-	return m.containers[m.containerCursor], true
+	return m.containers[indexes[m.containerCursor]], true
 }
 
 func (m Model) selectedImage() (containercli.Image, bool) {
-	if len(m.images) == 0 || m.imageCursor < 0 || m.imageCursor >= len(m.images) {
+	indexes := m.filteredImageIndexes()
+	if len(indexes) == 0 || m.imageCursor < 0 || m.imageCursor >= len(indexes) {
 		return containercli.Image{}, false
 	}
-	return m.images[m.imageCursor], true
+	return m.images[indexes[m.imageCursor]], true
 }
 
 func (m Model) selectedVolume() (containercli.Volume, bool) {
-	if len(m.volumes) == 0 || m.volumeCursor < 0 || m.volumeCursor >= len(m.volumes) {
+	indexes := m.filteredVolumeIndexes()
+	if len(indexes) == 0 || m.volumeCursor < 0 || m.volumeCursor >= len(indexes) {
 		return containercli.Volume{}, false
 	}
-	return m.volumes[m.volumeCursor], true
+	return m.volumes[indexes[m.volumeCursor]], true
 }
 
 func (m Model) selectedNetwork() (containercli.NetworkResource, bool) {
-	if len(m.networks) == 0 || m.networkCursor < 0 || m.networkCursor >= len(m.networks) {
+	indexes := m.filteredNetworkIndexes()
+	if len(indexes) == 0 || m.networkCursor < 0 || m.networkCursor >= len(indexes) {
 		return containercli.NetworkResource{}, false
 	}
-	return m.networks[m.networkCursor], true
+	return m.networks[indexes[m.networkCursor]], true
 }
 
 func joinErrors(errs []error) error {
@@ -704,13 +781,24 @@ func (m Model) renderFooter() string {
 	if m.confirm != nil {
 		return topStyle.Width(m.width).Foreground(colorYellow).Render(m.confirm.label + "  y/enter confirm, n/esc cancel")
 	}
+	if m.filtering {
+		value := m.filterInput
+		if value == "" {
+			value = " "
+		}
+		line := "/ " + value + "  enter apply, esc cancel, ctrl+u clear"
+		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
+	}
 	if m.showHelp {
-		help := "tab switch | r refresh | i inspect | l logs | e shell | s start | x stop | K kill | d delete | p prune | pgup/pgdown scroll | q quit"
+		help := "tab switch | / filter | esc clear filter | r refresh | i inspect | l logs | e shell | s start | x stop | K kill | d delete | p prune | pgup/pgdown scroll | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
 	if status == "" {
 		status = "? help"
+	}
+	if activeFilter(m.filter) != "" {
+		status = status + " | filter: " + m.filter
 	}
 	if m.err != nil {
 		return footerStyle.Width(m.width).Foreground(colorRed).Render(truncate(status, m.width-2))
@@ -741,10 +829,10 @@ func (m Model) renderSidebar(width int, height int) string {
 }
 
 func (m Model) renderTabs() string {
-	containers := fmt.Sprintf("containers %d", len(m.containers))
-	images := fmt.Sprintf("images %d", len(m.images))
-	volumes := fmt.Sprintf("volumes %d", len(m.volumes))
-	networks := fmt.Sprintf("networks %d", len(m.networks))
+	containers := m.tabLabel("containers", len(m.filteredContainerIndexes()), len(m.containers))
+	images := m.tabLabel("images", len(m.filteredImageIndexes()), len(m.images))
+	volumes := m.tabLabel("volumes", len(m.filteredVolumeIndexes()), len(m.volumes))
+	networks := m.tabLabel("networks", len(m.filteredNetworkIndexes()), len(m.networks))
 	tabs := []string{containers, images, volumes, networks}
 	for idx := range tabs {
 		label := " " + tabs[idx] + " "
@@ -757,19 +845,27 @@ func (m Model) renderTabs() string {
 	return strings.Join(tabs[:2], " ") + "\n" + strings.Join(tabs[2:], " ")
 }
 
+func (m Model) tabLabel(name string, filtered int, total int) string {
+	if activeFilter(m.filter) == "" || filtered == total {
+		return fmt.Sprintf("%s %d", name, total)
+	}
+	return fmt.Sprintf("%s %d/%d", name, filtered, total)
+}
+
 func (m Model) renderContainerList(width int, height int) []string {
-	if len(m.containers) == 0 {
-		return []string{mutedStyle.Render("No containers found.")}
+	indexes := m.filteredContainerIndexes()
+	if len(indexes) == 0 {
+		return []string{mutedStyle.Render(m.emptyListMessage("containers"))}
 	}
 	rows := []string{mutedStyle.Render(fitColumns("name", "state", width))}
-	start := visibleStart(m.containerCursor, height-1, len(m.containers))
+	start := visibleStart(m.containerCursor, height-1, len(indexes))
 	end := start + height - 1
-	if end > len(m.containers) {
-		end = len(m.containers)
+	if end > len(indexes) {
+		end = len(indexes)
 	}
 	now := effectiveNow(m.lastUpdated)
 	for idx := start; idx < end; idx++ {
-		container := m.containers[idx]
+		container := m.containers[indexes[idx]]
 		name := truncate(container.Name(), 22)
 		meta := fmt.Sprintf("%s  %s", container.State(), container.CreatedAgo(now))
 		line := fitColumns(name, meta, width)
@@ -784,17 +880,18 @@ func (m Model) renderContainerList(width int, height int) []string {
 }
 
 func (m Model) renderImageList(width int, height int) []string {
-	if len(m.images) == 0 {
-		return []string{mutedStyle.Render("No images found.")}
+	indexes := m.filteredImageIndexes()
+	if len(indexes) == 0 {
+		return []string{mutedStyle.Render(m.emptyListMessage("images"))}
 	}
 	rows := []string{mutedStyle.Render(fitColumns("image", "size", width))}
-	start := visibleStart(m.imageCursor, height-1, len(m.images))
+	start := visibleStart(m.imageCursor, height-1, len(indexes))
 	end := start + height - 1
-	if end > len(m.images) {
-		end = len(m.images)
+	if end > len(indexes) {
+		end = len(indexes)
 	}
 	for idx := start; idx < end; idx++ {
-		image := m.images[idx]
+		image := m.images[indexes[idx]]
 		name := truncate(image.Name(), 34)
 		line := fitColumns(name, image.Size(), width)
 		if idx == m.imageCursor {
@@ -806,18 +903,19 @@ func (m Model) renderImageList(width int, height int) []string {
 }
 
 func (m Model) renderVolumeList(width int, height int) []string {
-	if len(m.volumes) == 0 {
-		return []string{mutedStyle.Render("No volumes found.")}
+	indexes := m.filteredVolumeIndexes()
+	if len(indexes) == 0 {
+		return []string{mutedStyle.Render(m.emptyListMessage("volumes"))}
 	}
 	rows := []string{mutedStyle.Render(fitColumns("volume", "size", width))}
-	start := visibleStart(m.volumeCursor, height-1, len(m.volumes))
+	start := visibleStart(m.volumeCursor, height-1, len(indexes))
 	end := start + height - 1
-	if end > len(m.volumes) {
-		end = len(m.volumes)
+	if end > len(indexes) {
+		end = len(indexes)
 	}
 	now := effectiveNow(m.lastUpdated)
 	for idx := start; idx < end; idx++ {
-		volume := m.volumes[idx]
+		volume := m.volumes[indexes[idx]]
 		name := truncate(volume.Name(), 34)
 		meta := fmt.Sprintf("%s  %s", volume.Size(), volume.CreatedAgo(now))
 		line := fitColumns(name, meta, width)
@@ -830,17 +928,18 @@ func (m Model) renderVolumeList(width int, height int) []string {
 }
 
 func (m Model) renderNetworkList(width int, height int) []string {
-	if len(m.networks) == 0 {
-		return []string{mutedStyle.Render("No networks found.")}
+	indexes := m.filteredNetworkIndexes()
+	if len(indexes) == 0 {
+		return []string{mutedStyle.Render(m.emptyListMessage("networks"))}
 	}
 	rows := []string{mutedStyle.Render(fitColumns("network", "mode", width))}
-	start := visibleStart(m.networkCursor, height-1, len(m.networks))
+	start := visibleStart(m.networkCursor, height-1, len(indexes))
 	end := start + height - 1
-	if end > len(m.networks) {
-		end = len(m.networks)
+	if end > len(indexes) {
+		end = len(indexes)
 	}
 	for idx := start; idx < end; idx++ {
-		network := m.networks[idx]
+		network := m.networks[indexes[idx]]
 		name := truncate(network.Name(), 34)
 		meta := emptyDash(network.Configuration.Mode)
 		line := fitColumns(name, meta, width)
@@ -850,6 +949,13 @@ func (m Model) renderNetworkList(width int, height int) []string {
 		rows = append(rows, line)
 	}
 	return rows
+}
+
+func (m Model) emptyListMessage(kind string) string {
+	if activeFilter(m.filter) == "" {
+		return "No " + kind + " found."
+	}
+	return "No " + kind + " match " + fmt.Sprintf("%q.", m.filter)
 }
 
 func (m Model) renderPanel(width int, height int) string {
@@ -921,6 +1027,63 @@ func (m Model) statLines(containerID string) []string {
 		return lines
 	}
 	return nil
+}
+
+func (m Model) filteredContainerIndexes() []int {
+	filter := activeFilter(m.filter)
+	indexes := make([]int, 0, len(m.containers))
+	for idx, container := range m.containers {
+		if filter == "" || matchFields(filter, container.Name(), container.State(), container.ImageName(), container.Ports(), container.Platform()) {
+			indexes = append(indexes, idx)
+		}
+	}
+	return indexes
+}
+
+func (m Model) filteredImageIndexes() []int {
+	filter := activeFilter(m.filter)
+	indexes := make([]int, 0, len(m.images))
+	for idx, image := range m.images {
+		if filter == "" || matchFields(filter, image.Name(), image.Digest(), image.Platforms(), image.Size()) {
+			indexes = append(indexes, idx)
+		}
+	}
+	return indexes
+}
+
+func (m Model) filteredVolumeIndexes() []int {
+	filter := activeFilter(m.filter)
+	indexes := make([]int, 0, len(m.volumes))
+	for idx, volume := range m.volumes {
+		if filter == "" || matchFields(filter, volume.Name(), volume.Configuration.Driver, volume.Configuration.Format, volume.Configuration.Source, volume.Size()) {
+			indexes = append(indexes, idx)
+		}
+	}
+	return indexes
+}
+
+func (m Model) filteredNetworkIndexes() []int {
+	filter := activeFilter(m.filter)
+	indexes := make([]int, 0, len(m.networks))
+	for idx, network := range m.networks {
+		if filter == "" || matchFields(filter, network.Name(), network.Configuration.Mode, network.Configuration.Plugin, network.Status.IPv4Gateway, network.Status.IPv4Subnet, network.Status.IPv6Subnet) {
+			indexes = append(indexes, idx)
+		}
+	}
+	return indexes
+}
+
+func activeFilter(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func matchFields(filter string, fields ...string) bool {
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), filter) {
+			return true
+		}
+	}
+	return false
 }
 
 func statMatches(stat containercli.Stat, containerID string) bool {

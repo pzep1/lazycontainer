@@ -6,6 +6,7 @@ This is an early usable slice focused on day-to-day container work:
 
 - browse containers and images
 - browse volumes and networks
+- filter resource lists across names and metadata
 - inspect selected resources
 - tail container logs
 - start, stop, kill, and delete containers
@@ -34,6 +35,8 @@ go build -o bin/lazycont ./cmd/lazycont
 | Key | Action |
 | --- | --- |
 | `tab` | Switch between containers, images, volumes, and networks |
+| `/` | Filter resource lists |
+| `esc` | Clear the active filter |
 | `up` / `k` | Move selection up |
 | `down` / `j` | Move selection down |
 | `r` | Refresh lists and status |

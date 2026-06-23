@@ -188,6 +188,74 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestFilterNarrowsContainersAndActionsUseVisibleSelection(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	snapshot := snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainer("api-service", "docker.io/library/alpine:latest"),
+			testContainer("db", "docker.io/library/postgres:17"),
+		},
+	}
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshot)
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range "postgres" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := updated.View()
+	if !strings.Contains(view, "containers 1/2") {
+		t.Fatalf("view did not show filtered container count:\n%s", view)
+	}
+	if strings.Contains(view, "api-service") {
+		t.Fatalf("view included filtered-out container:\n%s", view)
+	}
+	if !strings.Contains(view, "db") {
+		t.Fatalf("view did not include matching container:\n%s", view)
+	}
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected delete command for filtered row")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, _ = updated.Update(done)
+
+	if client.deleted != "db" {
+		t.Fatalf("expected filtered delete target db, got %q", client.deleted)
+	}
+}
+
+func TestEscapeClearsFilter(t *testing.T) {
+	model := New(&fakeClient{})
+	snapshot := snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainer("api-service", "docker.io/library/alpine:latest"),
+			testContainer("db", "docker.io/library/postgres:17"),
+		},
+	}
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshot)
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	view := updated.View()
+	if strings.Contains(view, "containers 1/2") {
+		t.Fatalf("filter count remained after escape:\n%s", view)
+	}
+	if !strings.Contains(view, "api-service") || !strings.Contains(view, "db") {
+		t.Fatalf("view did not restore all containers:\n%s", view)
+	}
+}
+
 func TestShellRequiresRunningContainer(t *testing.T) {
 	model := New(&fakeClient{})
 	msg := model.Init()().(snapshotMsg)
@@ -200,5 +268,19 @@ func TestShellRequiresRunningContainer(t *testing.T) {
 	view := updated.View()
 	if !strings.Contains(view, "start db before opening a shell") {
 		t.Fatalf("view did not explain shell guard:\n%s", view)
+	}
+}
+
+func testContainer(id string, image string) containercli.Container {
+	return containercli.Container{
+		ID: id,
+		Configuration: containercli.ContainerConfiguration{
+			ID: id,
+			Image: containercli.ImageRef{
+				Reference: image,
+			},
+			Platform: containercli.Platform{OS: "linux", Architecture: "arm64"},
+		},
+		Status: containercli.ContainerStatus{State: "stopped"},
 	}
 }
