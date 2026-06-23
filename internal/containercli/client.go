@@ -244,6 +244,20 @@ func (c *Client) RunImage(ctx context.Context, image string, name string) error 
 	return err
 }
 
+func (c *Client) CreateContainer(ctx context.Context, image string, name string) error {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return errors.New("image is required")
+	}
+	args := []string{"create"}
+	if strings.TrimSpace(name) != "" {
+		args = append(args, "--name", strings.TrimSpace(name))
+	}
+	args = append(args, image)
+	_, err := c.runLong(ctx, args...)
+	return err
+}
+
 func (c *Client) BuildImage(ctx context.Context, tag string, contextDir string) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {

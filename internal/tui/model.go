@@ -39,6 +39,7 @@ type Client interface {
 	SetDefaultMachine(context.Context, string) error
 	PullImage(context.Context, string) error
 	RunImage(context.Context, string, string) error
+	CreateContainer(context.Context, string, string) error
 	BuildImage(context.Context, string, string) error
 	TagImage(context.Context, string, string) error
 	PushImage(context.Context, string) error
@@ -103,6 +104,7 @@ const (
 	promptNone promptKind = iota
 	promptPullImage
 	promptRunImage
+	promptCreateContainer
 	promptBuildImage
 	promptTagImage
 	promptCopy
@@ -370,6 +372,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startBuildPrompt(), nil
 	case "R":
 		return m.startRunPrompt()
+	case "N":
+		return m.startCreateContainerPrompt()
 	case "t":
 		return m.startTagPrompt()
 	case "P":
@@ -447,6 +451,21 @@ func (m Model) startRunPrompt() (tea.Model, tea.Cmd) {
 	m.promptInput = ""
 	m.promptTarget = image.Name()
 	m.statusLine = "run image " + image.Name()
+	return m, nil
+}
+
+func (m Model) startCreateContainerPrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceImages {
+		return m, nil
+	}
+	image, ok := m.selectedImage()
+	if !ok {
+		return m, nil
+	}
+	m.prompt = promptCreateContainer
+	m.promptInput = ""
+	m.promptTarget = image.Name()
+	m.statusLine = "create container from " + image.Name()
 	return m, nil
 }
 
@@ -690,6 +709,26 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 			message := "started container from " + image
 			if name != "" {
 				message = "started " + name
+			}
+			return actionDoneMsg{message: message, err: err}
+		}
+	case promptCreateContainer:
+		image := m.promptTarget
+		name := strings.TrimSpace(m.promptInput)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if strings.TrimSpace(image) == "" {
+			m.statusLine = "container create cancelled"
+			return m, nil
+		}
+		m.busy = "creating container from " + image
+		m.statusLine = "creating container from " + image
+		return m, func() tea.Msg {
+			err := m.client.CreateContainer(context.Background(), image, name)
+			message := "created container from " + image
+			if name != "" {
+				message = "created container " + name
 			}
 			return actionDoneMsg{message: message, err: err}
 		}
@@ -1600,7 +1639,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | O save image | L load image | R run image | C create volume/network | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | O save image | L load image | R run image | N create container | C create volume/network | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -1629,6 +1668,8 @@ func (m Model) promptLine() string {
 		return "pull image: " + m.promptInput + "  enter pull, esc cancel"
 	case promptRunImage:
 		return "container name for " + m.promptTarget + ": " + m.promptInput + "  enter run, blank auto, esc cancel"
+	case promptCreateContainer:
+		return "container name for " + m.promptTarget + ": " + m.promptInput + "  enter create stopped, blank auto, esc cancel"
 	case promptBuildImage:
 		return "build image tag [context-dir]: " + m.promptInput + "  enter build, context defaults ., esc cancel"
 	case promptTagImage:

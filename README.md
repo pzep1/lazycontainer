@@ -20,7 +20,7 @@ This is an early usable slice focused on day-to-day container work:
 - retag selected images
 - save and load image archives
 - push selected images to a registry
-- pull images and run selected images as detached containers
+- pull images, create stopped containers, and run selected images as detached containers
 - start, restart, stop, kill, and delete containers
 - create, stop, delete, and set default machines
 - create volumes and networks
@@ -63,6 +63,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `O` | Save selected image to an OCI tar archive |
 | `L` | Load an image from an OCI tar archive |
 | `R` | Run the selected image detached, with an optional name |
+| `N` | Create a stopped container from the selected image, with an optional name |
 | `M` | Create a machine from the machines pane as `<image> [name]` |
 | `S` | Set selected machine as the default machine |
 | `C` | Create a volume as `<name> [size]` or network as `<name> [subnet]` from its pane |

@@ -404,6 +404,20 @@ func TestRunImageUsesDetachedContainerWithOptionalName(t *testing.T) {
 	}
 }
 
+func TestCreateContainerUsesSelectedImageWithOptionalName(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.CreateContainer(context.Background(), "docker.io/library/alpine:latest", "scratch"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"create", "--name", "scratch", "docker.io/library/alpine:latest"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestBuildImageUsesPlainProgressAndDefaultContext(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}

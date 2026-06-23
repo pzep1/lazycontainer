@@ -17,6 +17,8 @@ type fakeClient struct {
 	pulled         string
 	runImage       string
 	runName        string
+	createImage    string
+	createName     string
 	buildTag       string
 	buildContext   string
 	tagSource      string
@@ -197,6 +199,12 @@ func (f *fakeClient) PullImage(_ context.Context, reference string) error {
 func (f *fakeClient) RunImage(_ context.Context, image string, name string) error {
 	f.runImage = image
 	f.runName = name
+	return nil
+}
+
+func (f *fakeClient) CreateContainer(_ context.Context, image string, name string) error {
+	f.createImage = image
+	f.createName = name
 	return nil
 }
 
@@ -907,6 +915,42 @@ func TestRunSelectedImagePromptsForOptionalName(t *testing.T) {
 	}
 	if client.runName != "scratch" {
 		t.Fatalf("expected container name scratch, got %q", client.runName)
+	}
+}
+
+func TestCreateContainerFromSelectedImagePromptsForOptionalName(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		images: []containercli.Image{{
+			ID: "abc",
+			Configuration: containercli.ImageConfiguration{
+				Name: "docker.io/library/alpine:latest",
+			},
+		}},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	for _, r := range "scratch" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected create container command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after create container")
+	}
+
+	if client.createImage != "docker.io/library/alpine:latest" {
+		t.Fatalf("expected create image target, got %q", client.createImage)
+	}
+	if client.createName != "scratch" {
+		t.Fatalf("expected container name scratch, got %q", client.createName)
 	}
 }
 
