@@ -178,6 +178,19 @@ func (c *Client) ShellCommand(id string, shell string) (*exec.Cmd, error) {
 	return exec.Command(c.binaryName(), "exec", "--interactive", "--tty", id, shell), nil
 }
 
+func (c *Client) Exec(ctx context.Context, id string, command string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("container id is required")
+	}
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", errors.New("command is required")
+	}
+	output, err := c.run(ctx, "exec", id, "/bin/sh", "-lc", command)
+	return string(output), err
+}
+
 func (c *Client) MachineShellCommand(id string) (*exec.Cmd, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, errors.New("machine id is required")

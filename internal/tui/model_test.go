@@ -28,6 +28,8 @@ type fakeClient struct {
 	exportOutput   string
 	restarted      string
 	followLogsID   string
+	execID         string
+	execCommand    string
 	machineLogsID  string
 	machineShellID string
 	machineImage   string
@@ -156,6 +158,12 @@ func (f *fakeClient) InspectMachine(context.Context, string) (string, error) {
 
 func (f *fakeClient) ShellCommand(string, string) (*exec.Cmd, error) {
 	return exec.Command("true"), nil
+}
+
+func (f *fakeClient) Exec(_ context.Context, id string, command string) (string, error) {
+	f.execID = id
+	f.execCommand = command
+	return "ok\n", nil
 }
 
 func (f *fakeClient) MachineShellCommand(id string) (*exec.Cmd, error) {
@@ -492,6 +500,60 @@ func TestShellRequiresRunningContainer(t *testing.T) {
 	view := updated.View()
 	if !strings.Contains(view, "start db before opening a shell") {
 		t.Fatalf("view did not explain shell guard:\n%s", view)
+	}
+}
+
+func TestExecCommandRequiresRunningContainer(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	updated, _ = updated.Update(msg)
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	if cmd != nil {
+		t.Fatalf("expected no exec prompt command for stopped container")
+	}
+	if client.execID != "" {
+		t.Fatalf("exec ran for stopped container")
+	}
+	view := updated.View()
+	if !strings.Contains(view, "start db before running commands") {
+		t.Fatalf("view did not explain exec guard:\n%s", view)
+	}
+}
+
+func TestExecCommandShowsSelectedContainerOutput(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("api-service", "docker.io/library/alpine:latest", "running"),
+			testContainerWithState("db", "docker.io/library/postgres:17", "running"),
+		},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	for _, r := range "cat /etc/os-release" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected exec command")
+	}
+	output := cmd().(outputMsg)
+	updated, _ = updated.Update(output)
+
+	if client.execID != "db" {
+		t.Fatalf("expected exec target db, got %q", client.execID)
+	}
+	if client.execCommand != "cat /etc/os-release" {
+		t.Fatalf("expected exec command, got %q", client.execCommand)
+	}
+	view := updated.View()
+	if !strings.Contains(view, "Exec db") || !strings.Contains(view, "ok") {
+		t.Fatalf("view did not show exec output:\n%s", view)
 	}
 }
 

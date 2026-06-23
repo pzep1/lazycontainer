@@ -253,6 +253,24 @@ func TestShellCommandUsesInteractiveTTYExec(t *testing.T) {
 	}
 }
 
+func TestExecRunsShellCommandInContainer(t *testing.T) {
+	runner := &fakeRunner{output: []byte("ok\n")}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	output, err := client.Exec(context.Background(), "db", "cat /etc/os-release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "ok\n" {
+		t.Fatalf("unexpected output %q", output)
+	}
+
+	wantArgs := []string{"exec", "db", "/bin/sh", "-lc", "cat /etc/os-release"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestMachineCommandsUseSelectedMachineID(t *testing.T) {
 	client := &Client{Binary: "container"}
 

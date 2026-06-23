@@ -12,6 +12,7 @@ This is an early usable slice focused on day-to-day container work:
 - view image variant and layer history
 - tail container or machine logs
 - follow container or machine logs in the terminal
+- run one-off commands in selected running containers
 - view container CPU, memory, network, disk, and process metrics
 - export a selected container filesystem as a tar archive
 - copy files or folders between a selected container and the local filesystem
@@ -66,6 +67,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `l` | Tail selected container or machine logs |
 | `f` | Follow selected container or machine logs until the command exits |
 | `e` | Open `/bin/sh` in the selected running container, or a shell in the selected machine |
+| `X` | Run a one-off command in the selected running container and show its output |
 | `s` | Start selected container |
 | `ctrl+r` | Restart selected running container |
 | `x` | Stop selected container or machine |

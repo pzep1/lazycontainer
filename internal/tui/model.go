@@ -33,6 +33,7 @@ type Client interface {
 	InspectNetwork(context.Context, string) (string, error)
 	InspectMachine(context.Context, string) (string, error)
 	ShellCommand(string, string) (*exec.Cmd, error)
+	Exec(context.Context, string, string) (string, error)
 	MachineShellCommand(string) (*exec.Cmd, error)
 	CreateMachine(context.Context, string, string) error
 	SetDefaultMachine(context.Context, string) error
@@ -103,6 +104,7 @@ const (
 	promptCopy
 	promptCreateMachine
 	promptExportContainer
+	promptExecCommand
 )
 
 type pendingConfirm struct {
@@ -378,6 +380,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.followLogsSelected()
 	case "e":
 		return m.shellSelected()
+	case "X":
+		return m.startExecPrompt()
 	case "s":
 		return m.lifecycleSelected("starting", "started", func(ctx context.Context, id string) error {
 			return m.client.Start(ctx, id)
@@ -484,6 +488,26 @@ func (m Model) startExportPrompt() (tea.Model, tea.Cmd) {
 	m.promptInput = defaultContainerExportPath(id)
 	m.promptTarget = id
 	m.statusLine = "export container " + id
+	return m, nil
+}
+
+func (m Model) startExecPrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceContainers {
+		return m, nil
+	}
+	container, ok := m.selectedContainer()
+	if !ok {
+		return m, nil
+	}
+	id := container.Name()
+	if container.State() != "running" {
+		m.statusLine = "start " + id + " before running commands"
+		return m, nil
+	}
+	m.prompt = promptExecCommand
+	m.promptInput = ""
+	m.promptTarget = id
+	m.statusLine = "exec command in " + id
 	return m, nil
 }
 
@@ -674,6 +698,26 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			err := m.client.ExportContainer(context.Background(), container, outputPath)
 			return actionDoneMsg{message: "exported " + container + " to " + outputPath, err: err}
+		}
+	case promptExecCommand:
+		container := m.promptTarget
+		command := strings.TrimSpace(m.promptInput)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if strings.TrimSpace(container) == "" || command == "" {
+			m.statusLine = "exec cancelled"
+			return m, nil
+		}
+		m.busy = "running command in " + container
+		m.statusLine = "running command in " + container
+		m.panelMode = panelInspect
+		return m, func() tea.Msg {
+			body, err := m.client.Exec(context.Background(), container, command)
+			if strings.TrimSpace(body) == "" && err == nil {
+				body = "Command completed with no output."
+			}
+			return outputMsg{title: "Exec " + container, body: body, err: err}
 		}
 	case promptCreateMachine:
 		image, name, ok := parseCreateMachineInput(m.promptInput)
@@ -1417,7 +1461,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -1456,6 +1500,8 @@ func (m Model) promptLine() string {
 		return "machine image [name]: " + m.promptInput + "  enter create, name optional, esc cancel"
 	case promptExportContainer:
 		return "export " + m.promptTarget + " to tar path: " + m.promptInput + "  enter export, ctrl+u clear, esc cancel"
+	case promptExecCommand:
+		return "exec in " + m.promptTarget + ": " + m.promptInput + "  enter run, esc cancel"
 	default:
 		return ""
 	}
