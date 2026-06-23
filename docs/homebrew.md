@@ -2,7 +2,7 @@
 
 `Formula/lazycont.rb` is a tap-ready Homebrew formula for installing lazycont from source.
 
-The formula is HEAD-only until the project has a tagged release archive and checksum. Homebrew also requires formulae to live in a tap, so the first public packaging target should be a small tap such as `pz/homebrew-lazycont`.
+The formula is HEAD-only until the project has a tagged release archive and checksum. Homebrew core now ships Apple's `container` CLI as the `container` formula, so lazycont can depend on that package instead of asking users to install the CLI separately. Homebrew also requires formulae to live in a tap, so the first public packaging target should be a small tap such as `pz/homebrew-lazycont`.
 
 ## Formula smoke
 
@@ -13,7 +13,13 @@ brew install --HEAD pz/lazycont/lazycont
 lazycont --version
 ```
 
-The formula intentionally tests `--version` and `--help` so Homebrew can verify the binary without requiring Apple's `container` CLI to be installed and initialized.
+The formula intentionally tests `--version` and `--help` so Homebrew can verify the binary without requiring Apple's container service to be running.
+
+The formula declares `depends_on "container"`, but users still need to start Apple's container service before using the TUI:
+
+```sh
+container system start
+```
 
 ## Publish a tap
 

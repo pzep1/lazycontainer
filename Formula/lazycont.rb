@@ -4,6 +4,7 @@ class Lazycont < Formula
   head "https://github.com/pz/lazycont.git", branch: "main"
 
   depends_on "go" => :build
+  depends_on "container"
   depends_on :macos
 
   def install
@@ -17,8 +18,11 @@ class Lazycont < Formula
 
   def caveats
     <<~EOS
-      lazycont drives Apple's container CLI. Install and initialize Apple's
-      container tool separately before launching the TUI.
+      lazycont drives Apple's container CLI. Homebrew installs it as a
+      dependency, but you still need to start its system service before
+      launching the TUI:
+
+        container system start
     EOS
   end
 

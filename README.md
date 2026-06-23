@@ -38,7 +38,7 @@ This is an early usable slice focused on day-to-day container work:
 
 ## Requirements
 
-- macOS with Apple's `container` CLI installed and initialized
+- macOS with Apple's `container` CLI installed and its system service started
 - Go matching `go.mod` when building from source
 
 ## Install
@@ -49,7 +49,7 @@ Homebrew tap formula, once the tap is published:
 brew install --HEAD pz/lazycont/lazycont
 ```
 
-The formula is HEAD-only until the first tagged release. See [docs/homebrew.md](docs/homebrew.md) for the tap publishing and stable release steps.
+The formula depends on Homebrew's Apple `container` package. It is HEAD-only until the first tagged release. See [docs/homebrew.md](docs/homebrew.md) for the tap publishing and stable release steps.
 
 ## Run From Source
 
