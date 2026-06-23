@@ -221,6 +221,19 @@ func (c *Client) BuildImage(ctx context.Context, tag string, contextDir string) 
 	return err
 }
 
+func (c *Client) TagImage(ctx context.Context, source string, target string) error {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return errors.New("source image is required")
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return errors.New("target image is required")
+	}
+	_, err := c.run(ctx, "image", "tag", source, target)
+	return err
+}
+
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "start", id)
 	return err

@@ -14,6 +14,7 @@ This is an early usable slice focused on day-to-day container work:
 - follow container or machine logs in the terminal
 - view container CPU, memory, network, disk, and process metrics
 - build local images from a Dockerfile or Containerfile
+- retag selected images
 - pull images and run selected images as detached containers
 - start, restart, stop, kill, and delete containers
 - stop and delete machines
@@ -51,6 +52,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `u` | Toggle periodic auto-refresh |
 | `a` | Pull an image by reference |
 | `b` | Build an image from a local context as `<tag> [context-dir]` |
+| `t` | Tag selected image with a new reference |
 | `R` | Run the selected image detached, with an optional name |
 | `i` / `enter` | Inspect selected resource |
 | `l` | Tail selected container or machine logs |

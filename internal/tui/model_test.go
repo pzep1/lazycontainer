@@ -19,6 +19,8 @@ type fakeClient struct {
 	runName        string
 	buildTag       string
 	buildContext   string
+	tagSource      string
+	tagTarget      string
 	restarted      string
 	followLogsID   string
 	machineLogsID  string
@@ -167,6 +169,12 @@ func (f *fakeClient) RunImage(_ context.Context, image string, name string) erro
 func (f *fakeClient) BuildImage(_ context.Context, tag string, contextDir string) error {
 	f.buildTag = tag
 	f.buildContext = contextDir
+	return nil
+}
+
+func (f *fakeClient) TagImage(_ context.Context, source string, target string) error {
+	f.tagSource = source
+	f.tagTarget = target
 	return nil
 }
 
@@ -766,6 +774,42 @@ func TestBuildImagePromptBuildsWithProvidedContext(t *testing.T) {
 	}
 	if client.buildContext != "./services/api" {
 		t.Fatalf("expected provided build context, got %q", client.buildContext)
+	}
+}
+
+func TestTagSelectedImagePromptsForTargetReference(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		images: []containercli.Image{{
+			ID: "abc",
+			Configuration: containercli.ImageConfiguration{
+				Name: "docker.io/library/alpine:latest",
+			},
+		}},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	for _, r := range "registry.example.com/alpine:dev" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected tag image command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after tag")
+	}
+
+	if client.tagSource != "docker.io/library/alpine:latest" {
+		t.Fatalf("expected selected image source, got %q", client.tagSource)
+	}
+	if client.tagTarget != "registry.example.com/alpine:dev" {
+		t.Fatalf("expected target image reference, got %q", client.tagTarget)
 	}
 }
 
