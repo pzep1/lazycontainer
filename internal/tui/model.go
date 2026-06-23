@@ -42,6 +42,7 @@ type Client interface {
 	TagImage(context.Context, string, string) error
 	PushImage(context.Context, string) error
 	Copy(context.Context, string, string) error
+	ExportContainer(context.Context, string, string) error
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Restart(context.Context, string) error
@@ -101,6 +102,7 @@ const (
 	promptTagImage
 	promptCopy
 	promptCreateMachine
+	promptExportContainer
 )
 
 type pendingConfirm struct {
@@ -364,6 +366,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.pushSelectedImage()
 	case "c":
 		return m.startCopyPrompt()
+	case "E":
+		return m.startExportPrompt()
 	case "M":
 		return m.startCreateMachinePrompt()
 	case "S":
@@ -464,6 +468,22 @@ func (m Model) startCopyPrompt() (tea.Model, tea.Cmd) {
 	m.promptInput = ""
 	m.promptTarget = id
 	m.statusLine = "copy files for " + id
+	return m, nil
+}
+
+func (m Model) startExportPrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceContainers {
+		return m, nil
+	}
+	container, ok := m.selectedContainer()
+	if !ok {
+		return m, nil
+	}
+	id := container.Name()
+	m.prompt = promptExportContainer
+	m.promptInput = defaultContainerExportPath(id)
+	m.promptTarget = id
+	m.statusLine = "export container " + id
 	return m, nil
 }
 
@@ -639,6 +659,22 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 			err := m.client.Copy(context.Background(), source, destination)
 			return actionDoneMsg{message: "copied files for " + container, err: err}
 		}
+	case promptExportContainer:
+		container := m.promptTarget
+		outputPath := strings.TrimSpace(m.promptInput)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if strings.TrimSpace(container) == "" || outputPath == "" {
+			m.statusLine = "export cancelled"
+			return m, nil
+		}
+		m.busy = "exporting " + container
+		m.statusLine = "exporting " + container
+		return m, func() tea.Msg {
+			err := m.client.ExportContainer(context.Background(), container, outputPath)
+			return actionDoneMsg{message: "exported " + container + " to " + outputPath, err: err}
+		}
 	case promptCreateMachine:
 		image, name, ok := parseCreateMachineInput(m.promptInput)
 		m.prompt = promptNone
@@ -702,6 +738,15 @@ func parseCreateMachineInput(input string) (string, string, bool) {
 		name = fields[1]
 	}
 	return fields[0], name, true
+}
+
+func defaultContainerExportPath(id string) string {
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return "container.tar"
+	}
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
+	return replacer.Replace(name) + ".tar"
 }
 
 func (m Model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
@@ -1372,7 +1417,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | M create machine | S default machine | i inspect | c copy files | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -1409,6 +1454,8 @@ func (m Model) promptLine() string {
 		return "copy for " + m.promptTarget + " src dest (:path is selected container): " + m.promptInput + "  enter copy, esc cancel"
 	case promptCreateMachine:
 		return "machine image [name]: " + m.promptInput + "  enter create, name optional, esc cancel"
+	case promptExportContainer:
+		return "export " + m.promptTarget + " to tar path: " + m.promptInput + "  enter export, ctrl+u clear, esc cancel"
 	default:
 		return ""
 	}

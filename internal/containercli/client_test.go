@@ -456,6 +456,20 @@ func TestCopyUsesSourceAndDestination(t *testing.T) {
 	}
 }
 
+func TestExportContainerUsesOutputPath(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.ExportContainer(context.Background(), "db", "db.tar"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"export", "--output", "db.tar", "db"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestRestartStopsThenStartsContainer(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}

@@ -13,6 +13,7 @@ This is an early usable slice focused on day-to-day container work:
 - tail container or machine logs
 - follow container or machine logs in the terminal
 - view container CPU, memory, network, disk, and process metrics
+- export a selected container filesystem as a tar archive
 - copy files or folders between a selected container and the local filesystem
 - build local images from a Dockerfile or Containerfile
 - retag selected images
@@ -61,6 +62,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `S` | Set selected machine as the default machine |
 | `i` / `enter` | Inspect selected resource |
 | `c` | Copy files for the selected container as `<src> <dest>`; use `:/path` for the selected container |
+| `E` | Export selected container filesystem to a tar archive |
 | `l` | Tail selected container or machine logs |
 | `f` | Follow selected container or machine logs until the command exits |
 | `e` | Open `/bin/sh` in the selected running container, or a shell in the selected machine |

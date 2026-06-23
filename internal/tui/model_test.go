@@ -24,6 +24,8 @@ type fakeClient struct {
 	pushed         string
 	copySource     string
 	copyDest       string
+	exportID       string
+	exportOutput   string
 	restarted      string
 	followLogsID   string
 	machineLogsID  string
@@ -203,6 +205,12 @@ func (f *fakeClient) PushImage(_ context.Context, reference string) error {
 func (f *fakeClient) Copy(_ context.Context, source string, destination string) error {
 	f.copySource = source
 	f.copyDest = destination
+	return nil
+}
+
+func (f *fakeClient) ExportContainer(_ context.Context, id string, outputPath string) error {
+	f.exportID = id
+	f.exportOutput = outputPath
 	return nil
 }
 
@@ -986,6 +994,33 @@ func TestCopySelectedContainerExpandsContainerDestination(t *testing.T) {
 	}
 	if client.copyDest != "db:/app/config.json" {
 		t.Fatalf("expected selected container destination, got %q", client.copyDest)
+	}
+}
+
+func TestExportSelectedContainerUsesDefaultTarPath(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("db", "docker.io/library/postgres:17")},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected export command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after export")
+	}
+
+	if client.exportID != "db" {
+		t.Fatalf("expected exported container db, got %q", client.exportID)
+	}
+	if client.exportOutput != "db.tar" {
+		t.Fatalf("expected default export path db.tar, got %q", client.exportOutput)
 	}
 }
 

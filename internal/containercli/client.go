@@ -279,6 +279,19 @@ func (c *Client) Copy(ctx context.Context, source string, destination string) er
 	return err
 }
 
+func (c *Client) ExportContainer(ctx context.Context, id string, outputPath string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("container id is required")
+	}
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return errors.New("export output path is required")
+	}
+	_, err := c.runLong(ctx, "export", "--output", outputPath, id)
+	return err
+}
+
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "start", id)
 	return err
