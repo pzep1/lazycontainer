@@ -91,3 +91,80 @@ func TestImagesParsesVariants(t *testing.T) {
 		t.Fatalf("unexpected size %q", images[0].Size())
 	}
 }
+
+func TestVolumesParsesAppleJSONShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`[
+		{
+			"id": "data",
+			"configuration": {
+				"name": "data",
+				"creationDate": "2026-06-15T08:27:31Z",
+				"driver": "local",
+				"format": "ext4",
+				"options": {"size": "10G"},
+				"sizeInBytes": 10737418240,
+				"source": "/Users/example/Library/Application Support/com.apple.container/volumes/data/volume.img"
+			}
+		}
+	]`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	volumes, err := client.Volumes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(volumes) != 1 {
+		t.Fatalf("expected 1 volume, got %d", len(volumes))
+	}
+	if volumes[0].Name() != "data" {
+		t.Fatalf("unexpected volume name %q", volumes[0].Name())
+	}
+	if volumes[0].Size() != "10.0 GB" {
+		t.Fatalf("unexpected volume size %q", volumes[0].Size())
+	}
+
+	wantArgs := []string{"volume", "list", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestNetworksParsesAppleJSONShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`[
+		{
+			"id": "default",
+			"configuration": {
+				"name": "default",
+				"creationDate": "2026-06-14T20:43:06Z",
+				"mode": "nat",
+				"plugin": "container-network-vmnet",
+				"labels": {"com.apple.container.resource.role": "builtin"}
+			},
+			"status": {
+				"ipv4Gateway": "192.168.64.1",
+				"ipv4Subnet": "192.168.64.0/24",
+				"ipv6Subnet": "fd00::/64"
+			}
+		}
+	]`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	networks, err := client.Networks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(networks) != 1 {
+		t.Fatalf("expected 1 network, got %d", len(networks))
+	}
+	if networks[0].Name() != "default" {
+		t.Fatalf("unexpected network name %q", networks[0].Name())
+	}
+	if networks[0].Status.IPv4Subnet != "192.168.64.0/24" {
+		t.Fatalf("unexpected ipv4 subnet %q", networks[0].Status.IPv4Subnet)
+	}
+
+	wantArgs := []string{"network", "list", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}

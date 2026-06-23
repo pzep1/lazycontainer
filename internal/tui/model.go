@@ -18,16 +18,24 @@ type Client interface {
 	SystemStatus(context.Context) (containercli.SystemStatus, error)
 	Containers(context.Context) ([]containercli.Container, error)
 	Images(context.Context) ([]containercli.Image, error)
+	Volumes(context.Context) ([]containercli.Volume, error)
+	Networks(context.Context) ([]containercli.NetworkResource, error)
 	Stats(context.Context, ...string) ([]containercli.Stat, error)
 	Logs(context.Context, string, int) (string, error)
 	InspectContainer(context.Context, string) (string, error)
 	InspectImage(context.Context, string) (string, error)
+	InspectVolume(context.Context, string) (string, error)
+	InspectNetwork(context.Context, string) (string, error)
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Kill(context.Context, string) error
 	DeleteContainer(context.Context, string, bool) error
 	DeleteImage(context.Context, string, bool) error
+	DeleteVolume(context.Context, string) error
+	DeleteNetwork(context.Context, string) error
 	PruneImages(context.Context, bool) error
+	PruneVolumes(context.Context) error
+	PruneNetworks(context.Context) error
 }
 
 type resourceKind int
@@ -35,6 +43,8 @@ type resourceKind int
 const (
 	resourceContainers resourceKind = iota
 	resourceImages
+	resourceVolumes
+	resourceNetworks
 )
 
 type panelMode int
@@ -52,6 +62,10 @@ const (
 	confirmDeleteContainer
 	confirmDeleteImage
 	confirmPruneImages
+	confirmDeleteVolume
+	confirmDeleteNetwork
+	confirmPruneVolumes
+	confirmPruneNetworks
 )
 
 type pendingConfirm struct {
@@ -69,9 +83,13 @@ type Model struct {
 	active          resourceKind
 	containerCursor int
 	imageCursor     int
+	volumeCursor    int
+	networkCursor   int
 
 	containers []containercli.Container
 	images     []containercli.Image
+	volumes    []containercli.Volume
+	networks   []containercli.NetworkResource
 	stats      []containercli.Stat
 	system     containercli.SystemStatus
 
@@ -92,6 +110,8 @@ type snapshotMsg struct {
 	system     containercli.SystemStatus
 	containers []containercli.Container
 	images     []containercli.Image
+	volumes    []containercli.Volume
+	networks   []containercli.NetworkResource
 	stats      []containercli.Stat
 	err        error
 	updated    time.Time
@@ -132,6 +152,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.system = msg.system
 		m.containers = msg.containers
 		m.images = msg.images
+		m.volumes = msg.volumes
+		m.networks = msg.networks
 		m.stats = msg.stats
 		m.err = msg.err
 		m.lastUpdated = msg.updated
@@ -186,11 +208,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 	case "tab":
-		if m.active == resourceContainers {
-			m.active = resourceImages
-		} else {
-			m.active = resourceContainers
-		}
+		m.active = (m.active + 1) % 4
 		m.resetPanel()
 		return m, nil
 	case "r":
@@ -235,8 +253,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prepareDelete()
 		return m, nil
 	case "p":
-		if m.active == resourceImages {
+		switch m.active {
+		case resourceImages:
 			m.confirm = &pendingConfirm{action: confirmPruneImages, label: "Prune unused images?"}
+		case resourceVolumes:
+			m.confirm = &pendingConfirm{action: confirmPruneVolumes, label: "Prune unused volumes?"}
+		case resourceNetworks:
+			m.confirm = &pendingConfirm{action: confirmPruneNetworks, label: "Prune unused networks?"}
 		}
 		return m, nil
 	}
@@ -288,6 +311,22 @@ func (m Model) refreshCmd() tea.Cmd {
 			})
 			msg.images = images
 		}
+		if volumes, err := m.client.Volumes(ctx); err != nil {
+			errs = append(errs, err)
+		} else {
+			sort.Slice(volumes, func(i, j int) bool {
+				return volumes[i].Name() < volumes[j].Name()
+			})
+			msg.volumes = volumes
+		}
+		if networks, err := m.client.Networks(ctx); err != nil {
+			errs = append(errs, err)
+		} else {
+			sort.Slice(networks, func(i, j int) bool {
+				return networks[i].Name() < networks[j].Name()
+			})
+			msg.networks = networks
+		}
 		if stats, err := m.client.Stats(ctx); err == nil {
 			msg.stats = stats
 		}
@@ -320,6 +359,30 @@ func (m Model) inspectSelected() (tea.Model, tea.Cmd) {
 		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.InspectImage(context.Background(), name)
+			return outputMsg{title: "Inspect " + name, body: body, err: err}
+		}
+	case resourceVolumes:
+		volume, ok := m.selectedVolume()
+		if !ok {
+			return m, nil
+		}
+		name := volume.Name()
+		m.busy = "inspecting"
+		m.panelMode = panelInspect
+		return m, func() tea.Msg {
+			body, err := m.client.InspectVolume(context.Background(), name)
+			return outputMsg{title: "Inspect " + name, body: body, err: err}
+		}
+	case resourceNetworks:
+		network, ok := m.selectedNetwork()
+		if !ok {
+			return m, nil
+		}
+		name := network.Name()
+		m.busy = "inspecting"
+		m.panelMode = panelInspect
+		return m, func() tea.Msg {
+			body, err := m.client.InspectNetwork(context.Background(), name)
 			return outputMsg{title: "Inspect " + name, body: body, err: err}
 		}
 	}
@@ -374,6 +437,18 @@ func (m *Model) prepareDelete() {
 			name := image.Name()
 			m.confirm = &pendingConfirm{action: confirmDeleteImage, target: name, label: "Delete image " + name + "?"}
 		}
+	case resourceVolumes:
+		volume, ok := m.selectedVolume()
+		if ok {
+			name := volume.Name()
+			m.confirm = &pendingConfirm{action: confirmDeleteVolume, target: name, label: "Delete volume " + name + "?"}
+		}
+	case resourceNetworks:
+		network, ok := m.selectedNetwork()
+		if ok {
+			name := network.Name()
+			m.confirm = &pendingConfirm{action: confirmDeleteNetwork, target: name, label: "Delete network " + name + "?"}
+		}
 	}
 }
 
@@ -390,6 +465,18 @@ func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
 		case confirmPruneImages:
 			err := m.client.PruneImages(ctx, false)
 			return actionDoneMsg{message: "pruned unused images", err: err}
+		case confirmDeleteVolume:
+			err := m.client.DeleteVolume(ctx, confirm.target)
+			return actionDoneMsg{message: "deleted volume " + confirm.target, err: err}
+		case confirmDeleteNetwork:
+			err := m.client.DeleteNetwork(ctx, confirm.target)
+			return actionDoneMsg{message: "deleted network " + confirm.target, err: err}
+		case confirmPruneVolumes:
+			err := m.client.PruneVolumes(ctx)
+			return actionDoneMsg{message: "pruned unused volumes", err: err}
+		case confirmPruneNetworks:
+			err := m.client.PruneNetworks(ctx)
+			return actionDoneMsg{message: "pruned unused networks", err: err}
 		default:
 			return actionDoneMsg{err: errors.New("unknown action")}
 		}
@@ -402,6 +489,10 @@ func (m *Model) moveSelection(delta int) {
 		m.containerCursor += delta
 	case resourceImages:
 		m.imageCursor += delta
+	case resourceVolumes:
+		m.volumeCursor += delta
+	case resourceNetworks:
+		m.networkCursor += delta
 	}
 	m.clampCursors()
 	m.resetPanel()
@@ -410,6 +501,8 @@ func (m *Model) moveSelection(delta int) {
 func (m *Model) clampCursors() {
 	m.containerCursor = clamp(m.containerCursor, 0, len(m.containers)-1)
 	m.imageCursor = clamp(m.imageCursor, 0, len(m.images)-1)
+	m.volumeCursor = clamp(m.volumeCursor, 0, len(m.volumes)-1)
+	m.networkCursor = clamp(m.networkCursor, 0, len(m.networks)-1)
 }
 
 func (m *Model) resetPanel() {
@@ -436,6 +529,20 @@ func (m Model) selectedImage() (containercli.Image, bool) {
 		return containercli.Image{}, false
 	}
 	return m.images[m.imageCursor], true
+}
+
+func (m Model) selectedVolume() (containercli.Volume, bool) {
+	if len(m.volumes) == 0 || m.volumeCursor < 0 || m.volumeCursor >= len(m.volumes) {
+		return containercli.Volume{}, false
+	}
+	return m.volumes[m.volumeCursor], true
+}
+
+func (m Model) selectedNetwork() (containercli.NetworkResource, bool) {
+	if len(m.networks) == 0 || m.networkCursor < 0 || m.networkCursor >= len(m.networks) {
+		return containercli.NetworkResource{}, false
+	}
+	return m.networks[m.networkCursor], true
 }
 
 func joinErrors(errs []error) error {
@@ -554,7 +661,7 @@ func (m Model) renderFooter() string {
 		return topStyle.Width(m.width).Foreground(colorYellow).Render(m.confirm.label + "  y/enter confirm, n/esc cancel")
 	}
 	if m.showHelp {
-		help := "tab switch | r refresh | i inspect | l logs | s start | x stop | K kill | d delete | p prune images | pgup/pgdown scroll | q quit"
+		help := "tab switch | r refresh | i inspect | l logs | s start | x stop | K kill | d delete | p prune | pgup/pgdown scroll | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -569,13 +676,22 @@ func (m Model) renderFooter() string {
 
 func (m Model) renderSidebar(width int, height int) string {
 	style := activePanelStyle.Width(width - 2).Height(height - 2)
-	title := m.renderTabs()
 	var lines []string
-	lines = append(lines, title, "")
-	if m.active == resourceContainers {
-		lines = append(lines, m.renderContainerList(width-4, height-5)...)
-	} else {
-		lines = append(lines, m.renderImageList(width-4, height-5)...)
+	lines = append(lines, strings.Split(m.renderTabs(), "\n")...)
+	lines = append(lines, "")
+	listHeight := height - len(lines) - 2
+	if listHeight < 1 {
+		listHeight = 1
+	}
+	switch m.active {
+	case resourceContainers:
+		lines = append(lines, m.renderContainerList(width-4, listHeight)...)
+	case resourceImages:
+		lines = append(lines, m.renderImageList(width-4, listHeight)...)
+	case resourceVolumes:
+		lines = append(lines, m.renderVolumeList(width-4, listHeight)...)
+	case resourceNetworks:
+		lines = append(lines, m.renderNetworkList(width-4, listHeight)...)
 	}
 	return style.Render(strings.Join(lines, "\n"))
 }
@@ -583,14 +699,18 @@ func (m Model) renderSidebar(width int, height int) string {
 func (m Model) renderTabs() string {
 	containers := fmt.Sprintf("containers %d", len(m.containers))
 	images := fmt.Sprintf("images %d", len(m.images))
-	if m.active == resourceContainers {
-		containers = selectedStyle.Render(" " + containers + " ")
-		images = mutedStyle.Render(" " + images + " ")
-	} else {
-		containers = mutedStyle.Render(" " + containers + " ")
-		images = selectedStyle.Render(" " + images + " ")
+	volumes := fmt.Sprintf("volumes %d", len(m.volumes))
+	networks := fmt.Sprintf("networks %d", len(m.networks))
+	tabs := []string{containers, images, volumes, networks}
+	for idx := range tabs {
+		label := " " + tabs[idx] + " "
+		if resourceKind(idx) == m.active {
+			tabs[idx] = selectedStyle.Render(label)
+		} else {
+			tabs[idx] = mutedStyle.Render(label)
+		}
 	}
-	return containers + " " + images
+	return strings.Join(tabs[:2], " ") + "\n" + strings.Join(tabs[2:], " ")
 }
 
 func (m Model) renderContainerList(width int, height int) []string {
@@ -641,6 +761,53 @@ func (m Model) renderImageList(width int, height int) []string {
 	return rows
 }
 
+func (m Model) renderVolumeList(width int, height int) []string {
+	if len(m.volumes) == 0 {
+		return []string{mutedStyle.Render("No volumes found.")}
+	}
+	rows := []string{mutedStyle.Render(fitColumns("volume", "size", width))}
+	start := visibleStart(m.volumeCursor, height-1, len(m.volumes))
+	end := start + height - 1
+	if end > len(m.volumes) {
+		end = len(m.volumes)
+	}
+	now := effectiveNow(m.lastUpdated)
+	for idx := start; idx < end; idx++ {
+		volume := m.volumes[idx]
+		name := truncate(volume.Name(), 34)
+		meta := fmt.Sprintf("%s  %s", volume.Size(), volume.CreatedAgo(now))
+		line := fitColumns(name, meta, width)
+		if idx == m.volumeCursor {
+			line = selectedStyle.Width(width).Render(truncate(line, width))
+		}
+		rows = append(rows, line)
+	}
+	return rows
+}
+
+func (m Model) renderNetworkList(width int, height int) []string {
+	if len(m.networks) == 0 {
+		return []string{mutedStyle.Render("No networks found.")}
+	}
+	rows := []string{mutedStyle.Render(fitColumns("network", "mode", width))}
+	start := visibleStart(m.networkCursor, height-1, len(m.networks))
+	end := start + height - 1
+	if end > len(m.networks) {
+		end = len(m.networks)
+	}
+	for idx := start; idx < end; idx++ {
+		network := m.networks[idx]
+		name := truncate(network.Name(), 34)
+		meta := emptyDash(network.Configuration.Mode)
+		line := fitColumns(name, meta, width)
+		if idx == m.networkCursor {
+			line = selectedStyle.Width(width).Render(truncate(line, width))
+		}
+		rows = append(rows, line)
+	}
+	return rows
+}
+
 func (m Model) renderPanel(width int, height int) string {
 	style := panelStyle.Width(width - 2).Height(height - 2)
 	title, body := m.panelContent()
@@ -676,6 +843,18 @@ func (m Model) panelContent() (string, string) {
 			return "Details", "No image selected."
 		}
 		return "Details " + image.Name(), strings.Join(image.DetailLines(now), "\n")
+	case resourceVolumes:
+		volume, ok := m.selectedVolume()
+		if !ok {
+			return "Details", "No volume selected."
+		}
+		return "Details " + volume.Name(), strings.Join(volume.DetailLines(now), "\n")
+	case resourceNetworks:
+		network, ok := m.selectedNetwork()
+		if !ok {
+			return "Details", "No network selected."
+		}
+		return "Details " + network.Name(), strings.Join(network.DetailLines(now), "\n")
 	default:
 		return "Details", ""
 	}
@@ -848,5 +1027,12 @@ func truncate(value string, width int) string {
 func stripNewline(value string) string {
 	value = strings.ReplaceAll(value, "\n", " ")
 	value = strings.ReplaceAll(value, "\r", " ")
+	return value
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
 	return value
 }

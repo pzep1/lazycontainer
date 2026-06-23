@@ -106,4 +106,41 @@ type ImageVariant struct {
 	Size     int64    `json:"size"`
 }
 
+type Volume struct {
+	ID            string              `json:"id"`
+	Configuration VolumeConfiguration `json:"configuration"`
+}
+
+type VolumeConfiguration struct {
+	CreationDate string         `json:"creationDate"`
+	Driver       string         `json:"driver"`
+	Format       string         `json:"format"`
+	Labels       map[string]any `json:"labels"`
+	Name         string         `json:"name"`
+	Options      map[string]any `json:"options"`
+	SizeInBytes  int64          `json:"sizeInBytes"`
+	Source       string         `json:"source"`
+}
+
+type NetworkResource struct {
+	ID            string               `json:"id"`
+	Configuration NetworkConfiguration `json:"configuration"`
+	Status        NetworkStatus        `json:"status"`
+}
+
+type NetworkConfiguration struct {
+	CreationDate string         `json:"creationDate"`
+	Labels       map[string]any `json:"labels"`
+	Mode         string         `json:"mode"`
+	Name         string         `json:"name"`
+	Options      map[string]any `json:"options"`
+	Plugin       string         `json:"plugin"`
+}
+
+type NetworkStatus struct {
+	IPv4Gateway string `json:"ipv4Gateway"`
+	IPv4Subnet  string `json:"ipv4Subnet"`
+	IPv6Subnet  string `json:"ipv6Subnet"`
+}
+
 type Stat map[string]any

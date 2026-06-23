@@ -3,6 +3,7 @@ package containercli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -166,6 +167,83 @@ func (i Image) DetailLines(now time.Time) []string {
 	return lines
 }
 
+func (v Volume) Name() string {
+	if v.Configuration.Name != "" {
+		return v.Configuration.Name
+	}
+	return v.ID
+}
+
+func (v Volume) Size() string {
+	return FormatBytes(v.Configuration.SizeInBytes)
+}
+
+func (v Volume) CreatedAgo(now time.Time) string {
+	return relativeTime(v.Configuration.CreationDate, now)
+}
+
+func (v Volume) DetailLines(now time.Time) []string {
+	lines := []string{
+		"Volume",
+		"  Name:    " + v.Name(),
+		"  Driver:  " + emptyDash(v.Configuration.Driver),
+		"  Format:  " + emptyDash(v.Configuration.Format),
+		"  Size:    " + v.Size(),
+		"  Created: " + v.CreatedAgo(now),
+		"  Source:  " + emptyDash(v.Configuration.Source),
+	}
+	if len(v.Configuration.Options) > 0 {
+		lines = append(lines, "", "Options")
+		for _, entry := range sortedMapLines(v.Configuration.Options) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	if len(v.Configuration.Labels) > 0 {
+		lines = append(lines, "", "Labels")
+		for _, entry := range sortedMapLines(v.Configuration.Labels) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	return lines
+}
+
+func (n NetworkResource) Name() string {
+	if n.Configuration.Name != "" {
+		return n.Configuration.Name
+	}
+	return n.ID
+}
+
+func (n NetworkResource) CreatedAgo(now time.Time) string {
+	return relativeTime(n.Configuration.CreationDate, now)
+}
+
+func (n NetworkResource) DetailLines(now time.Time) []string {
+	lines := []string{
+		"Network",
+		"  Name:       " + n.Name(),
+		"  Mode:       " + emptyDash(n.Configuration.Mode),
+		"  Plugin:     " + emptyDash(n.Configuration.Plugin),
+		"  Created:    " + n.CreatedAgo(now),
+		"  IPv4 GW:    " + emptyDash(n.Status.IPv4Gateway),
+		"  IPv4 CIDR:  " + emptyDash(n.Status.IPv4Subnet),
+		"  IPv6 CIDR:  " + emptyDash(n.Status.IPv6Subnet),
+	}
+	if len(n.Configuration.Options) > 0 {
+		lines = append(lines, "", "Options")
+		for _, entry := range sortedMapLines(n.Configuration.Options) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	if len(n.Configuration.Labels) > 0 {
+		lines = append(lines, "", "Labels")
+		for _, entry := range sortedMapLines(n.Configuration.Labels) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	return lines
+}
+
 func FormatBytes(bytes int64) string {
 	if bytes <= 0 {
 		return "-"
@@ -240,4 +318,17 @@ func emptyDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func sortedMapLines(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s: %v", key, values[key]))
+	}
+	return lines
 }

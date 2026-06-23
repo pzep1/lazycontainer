@@ -58,6 +58,18 @@ func (c *Client) Images(ctx context.Context) ([]Image, error) {
 	return images, err
 }
 
+func (c *Client) Volumes(ctx context.Context) ([]Volume, error) {
+	var volumes []Volume
+	err := c.runJSON(ctx, &volumes, "volume", "list", "--format", "json")
+	return volumes, err
+}
+
+func (c *Client) Networks(ctx context.Context) ([]NetworkResource, error) {
+	var networks []NetworkResource
+	err := c.runJSON(ctx, &networks, "network", "list", "--format", "json")
+	return networks, err
+}
+
 func (c *Client) Stats(ctx context.Context, containerIDs ...string) ([]Stat, error) {
 	args := append([]string{"stats"}, containerIDs...)
 	args = append(args, "--format", "json", "--no-stream")
@@ -90,6 +102,22 @@ func (c *Client) InspectImage(ctx context.Context, image string) (string, error)
 		return "", errors.New("image is required")
 	}
 	output, err := c.run(ctx, "image", "inspect", image)
+	return string(output), err
+}
+
+func (c *Client) InspectVolume(ctx context.Context, volume string) (string, error) {
+	if strings.TrimSpace(volume) == "" {
+		return "", errors.New("volume is required")
+	}
+	output, err := c.run(ctx, "volume", "inspect", volume)
+	return string(output), err
+}
+
+func (c *Client) InspectNetwork(ctx context.Context, network string) (string, error) {
+	if strings.TrimSpace(network) == "" {
+		return "", errors.New("network is required")
+	}
+	output, err := c.run(ctx, "network", "inspect", network)
 	return string(output), err
 }
 
@@ -128,12 +156,32 @@ func (c *Client) DeleteImage(ctx context.Context, image string, force bool) erro
 	return err
 }
 
+func (c *Client) DeleteVolume(ctx context.Context, volume string) error {
+	_, err := c.run(ctx, "volume", "delete", volume)
+	return err
+}
+
+func (c *Client) DeleteNetwork(ctx context.Context, network string) error {
+	_, err := c.run(ctx, "network", "delete", network)
+	return err
+}
+
 func (c *Client) PruneImages(ctx context.Context, all bool) error {
 	args := []string{"image", "prune"}
 	if all {
 		args = append(args, "--all")
 	}
 	_, err := c.run(ctx, args...)
+	return err
+}
+
+func (c *Client) PruneVolumes(ctx context.Context) error {
+	_, err := c.run(ctx, "volume", "prune")
+	return err
+}
+
+func (c *Client) PruneNetworks(ctx context.Context) error {
+	_, err := c.run(ctx, "network", "prune")
 	return err
 }
 

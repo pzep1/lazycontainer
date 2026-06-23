@@ -5,6 +5,7 @@ A lazydocker-style terminal UI for Apple's [`container`](https://github.com/appl
 This is an early usable slice focused on day-to-day container work:
 
 - browse containers and images
+- browse volumes and networks
 - inspect selected resources
 - tail container logs
 - start, stop, kill, and delete containers
@@ -32,7 +33,7 @@ go build -o bin/lazycont ./cmd/lazycont
 
 | Key | Action |
 | --- | --- |
-| `tab` | Switch between containers and images |
+| `tab` | Switch between containers, images, volumes, and networks |
 | `up` / `k` | Move selection up |
 | `down` / `j` | Move selection down |
 | `r` | Refresh lists and status |
@@ -41,8 +42,8 @@ go build -o bin/lazycont ./cmd/lazycont
 | `s` | Start selected container |
 | `x` | Stop selected container |
 | `K` | Kill selected container |
-| `d` | Delete selected container or image, with confirmation |
-| `p` | Prune unused images, with confirmation |
+| `d` | Delete selected container, image, volume, or network, with confirmation |
+| `p` | Prune unused images, volumes, or networks, with confirmation |
 | `?` | Toggle help |
 | `q` / `ctrl+c` | Quit |
 
