@@ -1,6 +1,7 @@
 package containercli
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -244,6 +245,86 @@ func (n NetworkResource) DetailLines(now time.Time) []string {
 	return lines
 }
 
+func (m Machine) Name() string {
+	return firstNonEmpty(
+		m.ID,
+		stringFromMap(m.Configuration, "name"),
+		stringFromMap(m.Raw, "name"),
+		stringFromMap(m.Raw, "id"),
+	)
+}
+
+func (m Machine) State() string {
+	statusMap, _ := m.Status.(map[string]any)
+	statusString, _ := m.Status.(string)
+	return firstNonEmpty(
+		statusString,
+		stringFromMap(statusMap, "state"),
+		stringFromMap(statusMap, "status"),
+		stringFromMap(m.Raw, "state"),
+		stringFromMap(m.Raw, "status"),
+		"unknown",
+	)
+}
+
+func (m Machine) Image() string {
+	return firstNonEmpty(
+		stringFromNestedMap(m.Configuration, "image", "reference"),
+		stringFromNestedMap(m.Configuration, "image", "name"),
+		stringFromNestedMap(m.Raw, "image", "reference"),
+		stringFromNestedMap(m.Raw, "image", "name"),
+		stringFromMap(m.Configuration, "image"),
+		stringFromMap(m.Raw, "image"),
+	)
+}
+
+func (m Machine) CPUs() string {
+	if value, ok := numberFromMap(m.Configuration, "cpus"); ok {
+		return fmt.Sprintf("%.0f", value)
+	}
+	if value, ok := numberFromNestedMap(m.Configuration, "resources", "cpus"); ok {
+		return fmt.Sprintf("%.0f", value)
+	}
+	return "-"
+}
+
+func (m Machine) Memory() string {
+	if value, ok := numberFromMap(m.Configuration, "memoryInBytes"); ok {
+		return FormatBytes(int64(value))
+	}
+	if value, ok := numberFromNestedMap(m.Configuration, "resources", "memoryInBytes"); ok {
+		return FormatBytes(int64(value))
+	}
+	return "-"
+}
+
+func (m Machine) CreatedAgo(now time.Time) string {
+	return relativeTime(firstNonEmpty(
+		stringFromMap(m.Configuration, "creationDate"),
+		stringFromMap(m.Raw, "creationDate"),
+	), now)
+}
+
+func (m Machine) DetailLines(now time.Time) []string {
+	lines := []string{
+		"Machine",
+		"  ID:       " + m.Name(),
+		"  State:    " + m.State(),
+		"  Default:  " + boolLabel(m.Default),
+		"  Image:    " + emptyDash(m.Image()),
+		"  CPUs:     " + m.CPUs(),
+		"  Memory:   " + m.Memory(),
+		"  Created:  " + m.CreatedAgo(now),
+	}
+	if len(m.Configuration) > 0 {
+		lines = append(lines, "", "Configuration")
+		for _, entry := range sortedMapLines(m.Configuration) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	return lines
+}
+
 func FormatBytes(bytes int64) string {
 	if bytes <= 0 {
 		return "-"
@@ -318,6 +399,93 @@ func emptyDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func boolLabel(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func stringFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
+func stringFromNestedMap(values map[string]any, key string, nestedKey string) string {
+	nested, ok := nestedMap(values, key)
+	if !ok {
+		return ""
+	}
+	return stringFromMap(nested, nestedKey)
+}
+
+func numberFromMap(values map[string]any, key string) (float64, bool) {
+	if values == nil {
+		return 0, false
+	}
+	value, ok := values[key]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func numberFromNestedMap(values map[string]any, key string, nestedKey string) (float64, bool) {
+	nested, ok := nestedMap(values, key)
+	if !ok {
+		return 0, false
+	}
+	return numberFromMap(nested, nestedKey)
+}
+
+func nestedMap(values map[string]any, key string) (map[string]any, bool) {
+	if values == nil {
+		return nil, false
+	}
+	value, ok := values[key]
+	if !ok {
+		return nil, false
+	}
+	typed, ok := value.(map[string]any)
+	return typed, ok
 }
 
 func sortedMapLines(values map[string]any) []string {

@@ -1,5 +1,7 @@
 package containercli
 
+import "encoding/json"
+
 type SystemStatus struct {
 	APIServerAppName string `json:"apiServerAppName"`
 	APIServerBuild   string `json:"apiServerBuild"`
@@ -141,6 +143,24 @@ type NetworkStatus struct {
 	IPv4Gateway string `json:"ipv4Gateway"`
 	IPv4Subnet  string `json:"ipv4Subnet"`
 	IPv6Subnet  string `json:"ipv6Subnet"`
+}
+
+type Machine struct {
+	ID            string         `json:"id"`
+	Configuration map[string]any `json:"configuration"`
+	Status        any            `json:"status"`
+	Default       bool           `json:"default"`
+	Raw           map[string]any `json:"-"`
+}
+
+func (m *Machine) UnmarshalJSON(data []byte) error {
+	type machineAlias Machine
+	var alias machineAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*m = Machine(alias)
+	return json.Unmarshal(data, &m.Raw)
 }
 
 type Stat map[string]any

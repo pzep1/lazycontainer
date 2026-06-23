@@ -21,23 +21,30 @@ type Client interface {
 	Images(context.Context) ([]containercli.Image, error)
 	Volumes(context.Context) ([]containercli.Volume, error)
 	Networks(context.Context) ([]containercli.NetworkResource, error)
+	Machines(context.Context) ([]containercli.Machine, error)
 	Stats(context.Context, ...string) ([]containercli.Stat, error)
 	Logs(context.Context, string, int) (string, error)
 	FollowLogsCommand(string, int) (*exec.Cmd, error)
+	MachineLogs(context.Context, string, int) (string, error)
+	FollowMachineLogsCommand(string, int) (*exec.Cmd, error)
 	InspectContainer(context.Context, string) (string, error)
 	InspectImage(context.Context, string) (string, error)
 	InspectVolume(context.Context, string) (string, error)
 	InspectNetwork(context.Context, string) (string, error)
+	InspectMachine(context.Context, string) (string, error)
 	ShellCommand(string, string) (*exec.Cmd, error)
+	MachineShellCommand(string) (*exec.Cmd, error)
 	PullImage(context.Context, string) error
 	RunImage(context.Context, string, string) error
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
+	StopMachine(context.Context, string) error
 	Kill(context.Context, string) error
 	DeleteContainer(context.Context, string, bool) error
 	DeleteImage(context.Context, string, bool) error
 	DeleteVolume(context.Context, string) error
 	DeleteNetwork(context.Context, string) error
+	DeleteMachine(context.Context, string) error
 	PruneImages(context.Context, bool) error
 	PruneVolumes(context.Context) error
 	PruneNetworks(context.Context) error
@@ -50,6 +57,7 @@ const (
 	resourceImages
 	resourceVolumes
 	resourceNetworks
+	resourceMachines
 )
 
 type panelMode int
@@ -71,6 +79,7 @@ const (
 	confirmDeleteNetwork
 	confirmPruneVolumes
 	confirmPruneNetworks
+	confirmDeleteMachine
 )
 
 type promptKind int
@@ -98,11 +107,13 @@ type Model struct {
 	imageCursor     int
 	volumeCursor    int
 	networkCursor   int
+	machineCursor   int
 
 	containers []containercli.Container
 	images     []containercli.Image
 	volumes    []containercli.Volume
 	networks   []containercli.NetworkResource
+	machines   []containercli.Machine
 	stats      []containercli.Stat
 	system     containercli.SystemStatus
 
@@ -134,6 +145,7 @@ type snapshotMsg struct {
 	images     []containercli.Image
 	volumes    []containercli.Volume
 	networks   []containercli.NetworkResource
+	machines   []containercli.Machine
 	stats      []containercli.Stat
 	err        error
 	updated    time.Time
@@ -192,6 +204,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.images = msg.images
 		m.volumes = msg.volumes
 		m.networks = msg.networks
+		m.machines = msg.machines
 		m.stats = msg.stats
 		m.err = msg.err
 		m.lastUpdated = msg.updated
@@ -289,7 +302,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 	case "tab":
-		m.active = (m.active + 1) % 4
+		m.active = (m.active + 1) % 5
 		m.resetPanel()
 		return m, nil
 	case "r":
@@ -566,6 +579,20 @@ func (m Model) refreshCmd() tea.Cmd {
 			})
 			msg.networks = networks
 		}
+		if machines, err := m.client.Machines(ctx); err != nil {
+			errs = append(errs, err)
+		} else {
+			sort.Slice(machines, func(i, j int) bool {
+				if machines[i].Default != machines[j].Default {
+					return machines[i].Default
+				}
+				if machines[i].State() != machines[j].State() {
+					return machines[i].State() == "running"
+				}
+				return machines[i].Name() < machines[j].Name()
+			})
+			msg.machines = machines
+		}
 		if stats, err := m.client.Stats(ctx); err == nil {
 			msg.stats = stats
 		}
@@ -650,40 +677,66 @@ func (m Model) inspectSelected() (tea.Model, tea.Cmd) {
 			body, err := m.client.InspectNetwork(context.Background(), name)
 			return outputMsg{title: "Inspect " + name, body: body, err: err}
 		}
+	case resourceMachines:
+		machine, ok := m.selectedMachine()
+		if !ok {
+			return m, nil
+		}
+		id := machine.Name()
+		m.busy = "inspecting"
+		m.panelMode = panelInspect
+		return m, func() tea.Msg {
+			body, err := m.client.InspectMachine(context.Background(), id)
+			return outputMsg{title: "Inspect " + id, body: body, err: err}
+		}
 	}
 	return m, nil
 }
 
 func (m Model) logsSelected() (tea.Model, tea.Cmd) {
-	container, ok := m.selectedContainer()
-	if m.active != resourceContainers || !ok {
-		return m, nil
-	}
-	id := container.Name()
-	m.busy = "loading logs"
-	m.panelMode = panelLogs
-	return m, func() tea.Msg {
-		body, err := m.client.Logs(context.Background(), id, 200)
-		if strings.TrimSpace(body) == "" && err == nil {
-			body = "No logs returned."
+	switch m.active {
+	case resourceContainers:
+		container, ok := m.selectedContainer()
+		if !ok {
+			return m, nil
 		}
-		return outputMsg{title: "Logs " + id, body: body, err: err}
+		id := container.Name()
+		m.busy = "loading logs"
+		m.panelMode = panelLogs
+		return m, func() tea.Msg {
+			body, err := m.client.Logs(context.Background(), id, 200)
+			if strings.TrimSpace(body) == "" && err == nil {
+				body = "No logs returned."
+			}
+			return outputMsg{title: "Logs " + id, body: body, err: err}
+		}
+	case resourceMachines:
+		machine, ok := m.selectedMachine()
+		if !ok {
+			return m, nil
+		}
+		id := machine.Name()
+		m.busy = "loading logs"
+		m.panelMode = panelLogs
+		return m, func() tea.Msg {
+			body, err := m.client.MachineLogs(context.Background(), id, 200)
+			if strings.TrimSpace(body) == "" && err == nil {
+				body = "No machine logs returned."
+			}
+			return outputMsg{title: "Machine logs " + id, body: body, err: err}
+		}
 	}
+	return m, nil
 }
 
 func (m Model) followLogsSelected() (tea.Model, tea.Cmd) {
-	if m.active != resourceContainers {
-		return m, nil
-	}
-	container, ok := m.selectedContainer()
-	if !ok {
-		return m, nil
-	}
-	id := container.Name()
-	cmd, err := m.client.FollowLogsCommand(id, 200)
+	id, cmd, err := m.followLogsCommandForSelection()
 	if err != nil {
 		m.err = err
 		m.statusLine = err.Error()
+		return m, nil
+	}
+	if cmd == nil {
 		return m, nil
 	}
 	m.busy = "following logs " + id
@@ -693,7 +746,33 @@ func (m Model) followLogsSelected() (tea.Model, tea.Cmd) {
 	})
 }
 
+func (m Model) followLogsCommandForSelection() (string, *exec.Cmd, error) {
+	switch m.active {
+	case resourceContainers:
+		container, ok := m.selectedContainer()
+		if !ok {
+			return "", nil, nil
+		}
+		id := container.Name()
+		cmd, err := m.client.FollowLogsCommand(id, 200)
+		return id, cmd, err
+	case resourceMachines:
+		machine, ok := m.selectedMachine()
+		if !ok {
+			return "", nil, nil
+		}
+		id := machine.Name()
+		cmd, err := m.client.FollowMachineLogsCommand(id, 200)
+		return id, cmd, err
+	default:
+		return "", nil, nil
+	}
+}
+
 func (m Model) shellSelected() (tea.Model, tea.Cmd) {
+	if m.active == resourceMachines {
+		return m.machineShellSelected()
+	}
 	if m.active != resourceContainers {
 		return m, nil
 	}
@@ -719,7 +798,39 @@ func (m Model) shellSelected() (tea.Model, tea.Cmd) {
 	})
 }
 
+func (m Model) machineShellSelected() (tea.Model, tea.Cmd) {
+	machine, ok := m.selectedMachine()
+	if !ok {
+		return m, nil
+	}
+	id := machine.Name()
+	cmd, err := m.client.MachineShellCommand(id)
+	if err != nil {
+		m.err = err
+		m.statusLine = err.Error()
+		return m, nil
+	}
+	m.busy = "machine shell " + id
+	m.statusLine = "opening machine shell " + id
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return shellFinishedMsg{id: id, err: err}
+	})
+}
+
 func (m Model) lifecycleSelected(busy string, done string, action func(context.Context, string) error) (tea.Model, tea.Cmd) {
+	if m.active == resourceMachines && busy == "stopping" {
+		machine, ok := m.selectedMachine()
+		if !ok {
+			return m, nil
+		}
+		id := machine.Name()
+		m.busy = busy
+		m.statusLine = busy + " " + id
+		return m, func() tea.Msg {
+			err := m.client.StopMachine(context.Background(), id)
+			return actionDoneMsg{message: "stopped machine " + id, err: err}
+		}
+	}
 	if m.active != resourceContainers {
 		return m, nil
 	}
@@ -762,6 +873,12 @@ func (m *Model) prepareDelete() {
 			name := network.Name()
 			m.confirm = &pendingConfirm{action: confirmDeleteNetwork, target: name, label: "Delete network " + name + "?"}
 		}
+	case resourceMachines:
+		machine, ok := m.selectedMachine()
+		if ok {
+			id := machine.Name()
+			m.confirm = &pendingConfirm{action: confirmDeleteMachine, target: id, label: "Delete machine " + id + "?"}
+		}
 	}
 }
 
@@ -790,6 +907,9 @@ func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
 		case confirmPruneNetworks:
 			err := m.client.PruneNetworks(ctx)
 			return actionDoneMsg{message: "pruned unused networks", err: err}
+		case confirmDeleteMachine:
+			err := m.client.DeleteMachine(ctx, confirm.target)
+			return actionDoneMsg{message: "deleted machine " + confirm.target, err: err}
 		default:
 			return actionDoneMsg{err: errors.New("unknown action")}
 		}
@@ -806,6 +926,8 @@ func (m *Model) moveSelection(delta int) {
 		m.volumeCursor += delta
 	case resourceNetworks:
 		m.networkCursor += delta
+	case resourceMachines:
+		m.machineCursor += delta
 	}
 	m.clampCursors()
 	m.resetPanel()
@@ -816,6 +938,7 @@ func (m *Model) clampCursors() {
 	m.imageCursor = clamp(m.imageCursor, 0, len(m.filteredImageIndexes())-1)
 	m.volumeCursor = clamp(m.volumeCursor, 0, len(m.filteredVolumeIndexes())-1)
 	m.networkCursor = clamp(m.networkCursor, 0, len(m.filteredNetworkIndexes())-1)
+	m.machineCursor = clamp(m.machineCursor, 0, len(m.filteredMachineIndexes())-1)
 }
 
 func (m *Model) resetPanel() {
@@ -860,6 +983,14 @@ func (m Model) selectedNetwork() (containercli.NetworkResource, bool) {
 		return containercli.NetworkResource{}, false
 	}
 	return m.networks[indexes[m.networkCursor]], true
+}
+
+func (m Model) selectedMachine() (containercli.Machine, bool) {
+	indexes := m.filteredMachineIndexes()
+	if len(indexes) == 0 || m.machineCursor < 0 || m.machineCursor >= len(indexes) {
+		return containercli.Machine{}, false
+	}
+	return m.machines[indexes[m.machineCursor]], true
 }
 
 func joinErrors(errs []error) error {
@@ -1041,6 +1172,8 @@ func (m Model) renderSidebar(width int, height int) string {
 		lines = append(lines, m.renderVolumeList(width-4, listHeight)...)
 	case resourceNetworks:
 		lines = append(lines, m.renderNetworkList(width-4, listHeight)...)
+	case resourceMachines:
+		lines = append(lines, m.renderMachineList(width-4, listHeight)...)
 	}
 	return style.Render(strings.Join(lines, "\n"))
 }
@@ -1050,7 +1183,8 @@ func (m Model) renderTabs() string {
 	images := m.tabLabel("images", len(m.filteredImageIndexes()), len(m.images))
 	volumes := m.tabLabel("volumes", len(m.filteredVolumeIndexes()), len(m.volumes))
 	networks := m.tabLabel("networks", len(m.filteredNetworkIndexes()), len(m.networks))
-	tabs := []string{containers, images, volumes, networks}
+	machines := m.tabLabel("machines", len(m.filteredMachineIndexes()), len(m.machines))
+	tabs := []string{containers, images, volumes, networks, machines}
 	for idx := range tabs {
 		label := " " + tabs[idx] + " "
 		if resourceKind(idx) == m.active {
@@ -1168,6 +1302,36 @@ func (m Model) renderNetworkList(width int, height int) []string {
 	return rows
 }
 
+func (m Model) renderMachineList(width int, height int) []string {
+	indexes := m.filteredMachineIndexes()
+	if len(indexes) == 0 {
+		return []string{mutedStyle.Render(m.emptyListMessage("machines"))}
+	}
+	rows := []string{mutedStyle.Render(fitColumns("machine", "state", width))}
+	start := visibleStart(m.machineCursor, height-1, len(indexes))
+	end := start + height - 1
+	if end > len(indexes) {
+		end = len(indexes)
+	}
+	now := effectiveNow(m.lastUpdated)
+	for idx := start; idx < end; idx++ {
+		machine := m.machines[indexes[idx]]
+		name := truncate(machine.Name(), 26)
+		meta := fmt.Sprintf("%s  %s", machine.State(), machine.CreatedAgo(now))
+		if machine.Default {
+			name = "* " + name
+		}
+		line := fitColumns(name, meta, width)
+		if idx == m.machineCursor {
+			line = selectedStyle.Width(width).Render(truncate(line, width))
+		} else if machine.State() == "running" {
+			line = runningStyle.Render(line)
+		}
+		rows = append(rows, line)
+	}
+	return rows
+}
+
 func (m Model) emptyListMessage(kind string) string {
 	if activeFilter(m.filter) == "" {
 		return "No " + kind + " found."
@@ -1222,6 +1386,12 @@ func (m Model) panelContent() (string, string) {
 			return "Details", "No network selected."
 		}
 		return "Details " + network.Name(), strings.Join(network.DetailLines(now), "\n")
+	case resourceMachines:
+		machine, ok := m.selectedMachine()
+		if !ok {
+			return "Details", "No machine selected."
+		}
+		return "Details " + machine.Name(), strings.Join(machine.DetailLines(now), "\n")
 	default:
 		return "Details", ""
 	}
@@ -1284,6 +1454,17 @@ func (m Model) filteredNetworkIndexes() []int {
 	indexes := make([]int, 0, len(m.networks))
 	for idx, network := range m.networks {
 		if filter == "" || matchFields(filter, network.Name(), network.Configuration.Mode, network.Configuration.Plugin, network.Status.IPv4Gateway, network.Status.IPv4Subnet, network.Status.IPv6Subnet) {
+			indexes = append(indexes, idx)
+		}
+	}
+	return indexes
+}
+
+func (m Model) filteredMachineIndexes() []int {
+	filter := activeFilter(m.filter)
+	indexes := make([]int, 0, len(m.machines))
+	for idx, machine := range m.machines {
+		if filter == "" || matchFields(filter, machine.Name(), machine.State(), machine.Image(), machine.CPUs(), machine.Memory()) {
 			indexes = append(indexes, idx)
 		}
 	}

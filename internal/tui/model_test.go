@@ -18,9 +18,13 @@ type fakeClient struct {
 	runImage       string
 	runName        string
 	followLogsID   string
+	machineLogsID  string
+	machineShellID string
+	stoppedMachine string
 	deleted        string
 	deletedVolume  string
 	deletedNetwork string
+	deletedMachine string
 }
 
 func (f *fakeClient) SystemStatus(context.Context) (containercli.SystemStatus, error) {
@@ -78,6 +82,21 @@ func (f *fakeClient) Networks(context.Context) ([]containercli.NetworkResource, 
 	}}, nil
 }
 
+func (f *fakeClient) Machines(context.Context) ([]containercli.Machine, error) {
+	return []containercli.Machine{{
+		ID:      "dev-machine",
+		Default: true,
+		Configuration: map[string]any{
+			"image": map[string]any{"reference": "docker.io/library/alpine:3.22"},
+			"resources": map[string]any{
+				"cpus":          float64(2),
+				"memoryInBytes": float64(2147483648),
+			},
+		},
+		Status: map[string]any{"state": "running"},
+	}}, nil
+}
+
 func (f *fakeClient) Stats(context.Context, ...string) ([]containercli.Stat, error) {
 	return nil, nil
 }
@@ -88,6 +107,16 @@ func (f *fakeClient) Logs(context.Context, string, int) (string, error) {
 
 func (f *fakeClient) FollowLogsCommand(id string, _ int) (*exec.Cmd, error) {
 	f.followLogsID = id
+	return exec.Command("true"), nil
+}
+
+func (f *fakeClient) MachineLogs(_ context.Context, id string, _ int) (string, error) {
+	f.machineLogsID = id
+	return "machine ready\n", nil
+}
+
+func (f *fakeClient) FollowMachineLogsCommand(id string, _ int) (*exec.Cmd, error) {
+	f.machineLogsID = id
 	return exec.Command("true"), nil
 }
 
@@ -107,7 +136,16 @@ func (f *fakeClient) InspectNetwork(context.Context, string) (string, error) {
 	return `[{"id":"default"}]`, nil
 }
 
+func (f *fakeClient) InspectMachine(context.Context, string) (string, error) {
+	return `[{"id":"dev-machine"}]`, nil
+}
+
 func (f *fakeClient) ShellCommand(string, string) (*exec.Cmd, error) {
+	return exec.Command("true"), nil
+}
+
+func (f *fakeClient) MachineShellCommand(id string) (*exec.Cmd, error) {
+	f.machineShellID = id
 	return exec.Command("true"), nil
 }
 
@@ -131,6 +169,11 @@ func (f *fakeClient) Stop(context.Context, string) error {
 	return nil
 }
 
+func (f *fakeClient) StopMachine(_ context.Context, id string) error {
+	f.stoppedMachine = id
+	return nil
+}
+
 func (f *fakeClient) Kill(context.Context, string) error {
 	return nil
 }
@@ -151,6 +194,11 @@ func (f *fakeClient) DeleteVolume(_ context.Context, volume string) error {
 
 func (f *fakeClient) DeleteNetwork(_ context.Context, network string) error {
 	f.deletedNetwork = network
+	return nil
+}
+
+func (f *fakeClient) DeleteMachine(_ context.Context, id string) error {
+	f.deletedMachine = id
 	return nil
 }
 
@@ -182,7 +230,7 @@ func TestModelLoadsSnapshotIntoView(t *testing.T) {
 	if !strings.Contains(view, "containers 1") {
 		t.Fatalf("view did not include container count:\n%s", view)
 	}
-	if !strings.Contains(view, "volumes 1") || !strings.Contains(view, "networks 1") {
+	if !strings.Contains(view, "volumes 1") || !strings.Contains(view, "networks 1") || !strings.Contains(view, "machines 1") {
 		t.Fatalf("view did not include secondary resource counts:\n%s", view)
 	}
 }
@@ -383,6 +431,74 @@ func TestFollowLogsUsesSelectedContainer(t *testing.T) {
 	}
 }
 
+func TestMachinePaneShowsAndActionsUseSelectedMachine(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(msg)
+	updated = switchToMachines(t, updated)
+
+	view := updated.View()
+	if !strings.Contains(view, "machines 1") {
+		t.Fatalf("view did not include machine count:\n%s", view)
+	}
+	if !strings.Contains(view, "dev-machine") || !strings.Contains(view, "running") {
+		t.Fatalf("view did not include selected machine:\n%s", view)
+	}
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil {
+		t.Fatalf("expected machine logs command")
+	}
+	logs := cmd().(outputMsg)
+	updated, _ = updated.Update(logs)
+	if client.machineLogsID != "dev-machine" {
+		t.Fatalf("expected machine log target dev-machine, got %q", client.machineLogsID)
+	}
+	if !strings.Contains(updated.View(), "machine ready") {
+		t.Fatalf("view did not show machine logs:\n%s", updated.View())
+	}
+
+	client.machineLogsID = ""
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatalf("expected follow machine logs exec command")
+	}
+	if client.machineLogsID != "dev-machine" {
+		t.Fatalf("expected follow machine log target dev-machine, got %q", client.machineLogsID)
+	}
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if cmd == nil {
+		t.Fatalf("expected machine shell exec command")
+	}
+	if client.machineShellID != "dev-machine" {
+		t.Fatalf("expected machine shell target dev-machine, got %q", client.machineShellID)
+	}
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatalf("expected stop machine command")
+	}
+	stopDone := cmd().(actionDoneMsg)
+	updated, _ = updated.Update(stopDone)
+	if client.stoppedMachine != "dev-machine" {
+		t.Fatalf("expected stopped machine dev-machine, got %q", client.stoppedMachine)
+	}
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	_, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected delete machine confirmation command")
+	}
+	deleteDone := cmd().(actionDoneMsg)
+	updated, _ = updated.Update(deleteDone)
+	if client.deletedMachine != "dev-machine" {
+		t.Fatalf("expected deleted machine dev-machine, got %q", client.deletedMachine)
+	}
+}
+
 func TestPullImagePromptRunsPullAndRefreshes(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client)
@@ -441,6 +557,19 @@ func TestRunSelectedImagePromptsForOptionalName(t *testing.T) {
 	if client.runName != "scratch" {
 		t.Fatalf("expected container name scratch, got %q", client.runName)
 	}
+}
+
+func switchToMachines(t *testing.T, model tea.Model) tea.Model {
+	t.Helper()
+	updated := model
+	for range 4 {
+		var cmd tea.Cmd
+		updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+		if cmd != nil {
+			t.Fatalf("expected no command while tabbing to machines")
+		}
+	}
+	return updated
 }
 
 func testContainer(id string, image string) containercli.Container {

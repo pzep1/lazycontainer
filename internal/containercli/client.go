@@ -72,6 +72,12 @@ func (c *Client) Networks(ctx context.Context) ([]NetworkResource, error) {
 	return networks, err
 }
 
+func (c *Client) Machines(ctx context.Context) ([]Machine, error) {
+	var machines []Machine
+	err := c.runJSON(ctx, &machines, "machine", "list", "--format", "json")
+	return machines, err
+}
+
 func (c *Client) Stats(ctx context.Context, containerIDs ...string) ([]Stat, error) {
 	args := append([]string{"stats"}, containerIDs...)
 	args = append(args, "--format", "json", "--no-stream")
@@ -99,6 +105,27 @@ func (c *Client) FollowLogsCommand(id string, lines int) (*exec.Cmd, error) {
 		lines = 200
 	}
 	return exec.Command(c.binaryName(), "logs", "--follow", "-n", fmt.Sprintf("%d", lines), id), nil
+}
+
+func (c *Client) MachineLogs(ctx context.Context, id string, lines int) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", errors.New("machine id is required")
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	output, err := c.run(ctx, "machine", "logs", "-n", fmt.Sprintf("%d", lines), id)
+	return string(output), err
+}
+
+func (c *Client) FollowMachineLogsCommand(id string, lines int) (*exec.Cmd, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, errors.New("machine id is required")
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	return exec.Command(c.binaryName(), "machine", "logs", "--follow", "-n", fmt.Sprintf("%d", lines), id), nil
 }
 
 func (c *Client) InspectContainer(ctx context.Context, id string) (string, error) {
@@ -133,6 +160,14 @@ func (c *Client) InspectNetwork(ctx context.Context, network string) (string, er
 	return string(output), err
 }
 
+func (c *Client) InspectMachine(ctx context.Context, id string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", errors.New("machine id is required")
+	}
+	output, err := c.run(ctx, "machine", "inspect", id)
+	return string(output), err
+}
+
 func (c *Client) ShellCommand(id string, shell string) (*exec.Cmd, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, errors.New("container id is required")
@@ -141,6 +176,13 @@ func (c *Client) ShellCommand(id string, shell string) (*exec.Cmd, error) {
 		shell = "/bin/sh"
 	}
 	return exec.Command(c.binaryName(), "exec", "--interactive", "--tty", id, shell), nil
+}
+
+func (c *Client) MachineShellCommand(id string) (*exec.Cmd, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, errors.New("machine id is required")
+	}
+	return exec.Command(c.binaryName(), "machine", "run", "--interactive", "--tty", "--name", id), nil
 }
 
 func (c *Client) PullImage(ctx context.Context, reference string) error {
@@ -176,6 +218,14 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 	return err
 }
 
+func (c *Client) StopMachine(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("machine id is required")
+	}
+	_, err := c.runLong(ctx, "machine", "stop", id)
+	return err
+}
+
 func (c *Client) Kill(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "kill", id)
 	return err
@@ -208,6 +258,14 @@ func (c *Client) DeleteVolume(ctx context.Context, volume string) error {
 
 func (c *Client) DeleteNetwork(ctx context.Context, network string) error {
 	_, err := c.run(ctx, "network", "delete", network)
+	return err
+}
+
+func (c *Client) DeleteMachine(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("machine id is required")
+	}
+	_, err := c.runLong(ctx, "machine", "delete", id)
 	return err
 }
 

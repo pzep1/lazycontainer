@@ -169,6 +169,48 @@ func TestNetworksParsesAppleJSONShape(t *testing.T) {
 	}
 }
 
+func TestMachinesParsesFlexibleAppleJSONShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`[
+		{
+			"id": "dev-machine",
+			"default": true,
+			"configuration": {
+				"name": "dev-machine",
+				"image": {"reference": "docker.io/library/alpine:3.22"},
+				"resources": {"cpus": 2, "memoryInBytes": 2147483648},
+				"creationDate": "2026-06-20T12:00:00Z"
+			},
+			"status": {"state": "running"}
+		}
+	]`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	machines, err := client.Machines(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(machines) != 1 {
+		t.Fatalf("expected 1 machine, got %d", len(machines))
+	}
+	if machines[0].Name() != "dev-machine" {
+		t.Fatalf("unexpected machine name %q", machines[0].Name())
+	}
+	if machines[0].State() != "running" {
+		t.Fatalf("unexpected machine state %q", machines[0].State())
+	}
+	if machines[0].Image() != "docker.io/library/alpine:3.22" {
+		t.Fatalf("unexpected machine image %q", machines[0].Image())
+	}
+	if machines[0].Memory() != "2.0 GB" {
+		t.Fatalf("unexpected machine memory %q", machines[0].Memory())
+	}
+
+	wantArgs := []string{"machine", "list", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestShellCommandUsesInteractiveTTYExec(t *testing.T) {
 	client := &Client{Binary: "container"}
 
@@ -183,6 +225,66 @@ func TestShellCommandUsesInteractiveTTYExec(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cmd.Args[1:], wantArgs) {
 		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, cmd.Args[1:])
+	}
+}
+
+func TestMachineCommandsUseSelectedMachineID(t *testing.T) {
+	client := &Client{Binary: "container"}
+
+	logs, err := client.FollowMachineLogsCommand("dev-machine", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLogs := []string{"machine", "logs", "--follow", "-n", "50", "dev-machine"}
+	if !reflect.DeepEqual(logs.Args[1:], wantLogs) {
+		t.Fatalf("machine logs args mismatch\nwant: %#v\n got: %#v", wantLogs, logs.Args[1:])
+	}
+
+	shell, err := client.MachineShellCommand("dev-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantShell := []string{"machine", "run", "--interactive", "--tty", "--name", "dev-machine"}
+	if !reflect.DeepEqual(shell.Args[1:], wantShell) {
+		t.Fatalf("machine shell args mismatch\nwant: %#v\n got: %#v", wantShell, shell.Args[1:])
+	}
+
+	runner := &fakeRunner{output: []byte("booted\n")}
+	client = &Client{Binary: "container", Runner: runner, Timeout: time.Second, LongTimeout: time.Second}
+	body, err := client.MachineLogs(context.Background(), "dev-machine", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "booted\n" {
+		t.Fatalf("unexpected machine logs body %q", body)
+	}
+	wantTail := []string{"machine", "logs", "-n", "50", "dev-machine"}
+	if !reflect.DeepEqual(runner.args, wantTail) {
+		t.Fatalf("machine logs args mismatch\nwant: %#v\n got: %#v", wantTail, runner.args)
+	}
+
+	if _, err := client.InspectMachine(context.Background(), "dev-machine"); err != nil {
+		t.Fatal(err)
+	}
+	wantInspect := []string{"machine", "inspect", "dev-machine"}
+	if !reflect.DeepEqual(runner.args, wantInspect) {
+		t.Fatalf("machine inspect args mismatch\nwant: %#v\n got: %#v", wantInspect, runner.args)
+	}
+
+	if err := client.StopMachine(context.Background(), "dev-machine"); err != nil {
+		t.Fatal(err)
+	}
+	wantStop := []string{"machine", "stop", "dev-machine"}
+	if !reflect.DeepEqual(runner.args, wantStop) {
+		t.Fatalf("machine stop args mismatch\nwant: %#v\n got: %#v", wantStop, runner.args)
+	}
+
+	if err := client.DeleteMachine(context.Background(), "dev-machine"); err != nil {
+		t.Fatal(err)
+	}
+	wantDelete := []string{"machine", "delete", "dev-machine"}
+	if !reflect.DeepEqual(runner.args, wantDelete) {
+		t.Fatalf("machine delete args mismatch\nwant: %#v\n got: %#v", wantDelete, runner.args)
 	}
 }
 
