@@ -37,9 +37,19 @@ This is an early usable slice focused on day-to-day container work:
 ## Requirements
 
 - macOS with Apple's `container` CLI installed and initialized
-- Go 1.24 or newer
+- Go matching `go.mod` when building from source
 
-## Run
+## Install
+
+Homebrew tap formula, once the tap is published:
+
+```sh
+brew install --HEAD pz/lazycont/lazycont
+```
+
+The formula is HEAD-only until the first tagged release. See [docs/homebrew.md](docs/homebrew.md) for the tap publishing and stable release steps.
+
+## Run From Source
 
 ```sh
 go run ./cmd/lazycont
