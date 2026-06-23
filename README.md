@@ -18,6 +18,7 @@ This is an early usable slice focused on day-to-day container work:
 - copy files or folders between a selected container and the local filesystem
 - build local images from a Dockerfile or Containerfile
 - retag selected images
+- save and load image archives
 - push selected images to a registry
 - pull images and run selected images as detached containers
 - start, restart, stop, kill, and delete containers
@@ -58,6 +59,8 @@ go build -o bin/lazycont ./cmd/lazycont
 | `b` | Build an image from a local context as `<tag> [context-dir]` |
 | `t` | Tag selected image with a new reference |
 | `P` | Push selected image to its registry |
+| `O` | Save selected image to an OCI tar archive |
+| `L` | Load an image from an OCI tar archive |
 | `R` | Run the selected image detached, with an optional name |
 | `M` | Create a machine from the machines pane as `<image> [name]` |
 | `S` | Set selected machine as the default machine |

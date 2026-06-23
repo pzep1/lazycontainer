@@ -460,6 +460,34 @@ func TestPushImageUsesPlainProgress(t *testing.T) {
 	}
 }
 
+func TestSaveImageUsesOutputPath(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.SaveImage(context.Background(), "docker.io/library/alpine:latest", "alpine.tar"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"image", "save", "--output", "alpine.tar", "docker.io/library/alpine:latest"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestLoadImageUsesInputPath(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.LoadImage(context.Background(), "alpine.tar"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"image", "load", "--input", "alpine.tar"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestCopyUsesSourceAndDestination(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}

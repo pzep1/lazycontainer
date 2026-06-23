@@ -22,6 +22,9 @@ type fakeClient struct {
 	tagSource      string
 	tagTarget      string
 	pushed         string
+	savedImage     string
+	saveOutput     string
+	loadedImage    string
 	copySource     string
 	copyDest       string
 	exportID       string
@@ -207,6 +210,17 @@ func (f *fakeClient) TagImage(_ context.Context, source string, target string) e
 
 func (f *fakeClient) PushImage(_ context.Context, reference string) error {
 	f.pushed = reference
+	return nil
+}
+
+func (f *fakeClient) SaveImage(_ context.Context, reference string, outputPath string) error {
+	f.savedImage = reference
+	f.saveOutput = outputPath
+	return nil
+}
+
+func (f *fakeClient) LoadImage(_ context.Context, inputPath string) error {
+	f.loadedImage = inputPath
 	return nil
 }
 
@@ -996,6 +1010,67 @@ func TestPushSelectedImageUsesImageReference(t *testing.T) {
 
 	if client.pushed != "registry.example.com/alpine:dev" {
 		t.Fatalf("expected pushed image reference, got %q", client.pushed)
+	}
+}
+
+func TestSaveSelectedImageUsesDefaultArchivePath(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		images: []containercli.Image{{
+			ID: "abc",
+			Configuration: containercli.ImageConfiguration{
+				Name: "docker.io/library/alpine:latest",
+			},
+		}},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if cmd != nil {
+		t.Fatalf("expected save prompt, got command")
+	}
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected save image command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after save")
+	}
+
+	if client.savedImage != "docker.io/library/alpine:latest" {
+		t.Fatalf("expected saved image reference, got %q", client.savedImage)
+	}
+	if client.saveOutput != "docker.io_library_alpine_latest.tar" {
+		t.Fatalf("expected default image archive path, got %q", client.saveOutput)
+	}
+}
+
+func TestLoadImageArchivePromptUsesInputPath(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	for _, r := range "./archives/alpine.tar" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected load image command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after load")
+	}
+
+	if client.loadedImage != "./archives/alpine.tar" {
+		t.Fatalf("expected loaded image archive path, got %q", client.loadedImage)
 	}
 }
 

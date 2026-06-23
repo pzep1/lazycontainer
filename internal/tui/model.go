@@ -42,6 +42,8 @@ type Client interface {
 	BuildImage(context.Context, string, string) error
 	TagImage(context.Context, string, string) error
 	PushImage(context.Context, string) error
+	SaveImage(context.Context, string, string) error
+	LoadImage(context.Context, string) error
 	Copy(context.Context, string, string) error
 	ExportContainer(context.Context, string, string) error
 	Start(context.Context, string) error
@@ -105,6 +107,8 @@ const (
 	promptCreateMachine
 	promptExportContainer
 	promptExecCommand
+	promptSaveImage
+	promptLoadImage
 )
 
 type pendingConfirm struct {
@@ -366,6 +370,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startTagPrompt()
 	case "P":
 		return m.pushSelectedImage()
+	case "O":
+		return m.startSaveImagePrompt()
+	case "L":
+		return m.startLoadImagePrompt()
 	case "c":
 		return m.startCopyPrompt()
 	case "E":
@@ -456,6 +464,33 @@ func (m Model) startTagPrompt() (tea.Model, tea.Cmd) {
 	m.promptInput = ""
 	m.promptTarget = image.Name()
 	m.statusLine = "tag image " + image.Name()
+	return m, nil
+}
+
+func (m Model) startSaveImagePrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceImages {
+		return m, nil
+	}
+	image, ok := m.selectedImage()
+	if !ok {
+		return m, nil
+	}
+	reference := image.Name()
+	m.prompt = promptSaveImage
+	m.promptInput = defaultImageArchivePath(reference)
+	m.promptTarget = reference
+	m.statusLine = "save image " + reference
+	return m, nil
+}
+
+func (m Model) startLoadImagePrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceImages {
+		return m, nil
+	}
+	m.prompt = promptLoadImage
+	m.promptInput = ""
+	m.promptTarget = ""
+	m.statusLine = "load image archive"
 	return m, nil
 }
 
@@ -719,6 +754,37 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 			}
 			return outputMsg{title: "Exec " + container, body: body, err: err}
 		}
+	case promptSaveImage:
+		reference := m.promptTarget
+		outputPath := strings.TrimSpace(m.promptInput)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if strings.TrimSpace(reference) == "" || outputPath == "" {
+			m.statusLine = "image save cancelled"
+			return m, nil
+		}
+		m.busy = "saving image " + reference
+		m.statusLine = "saving image " + reference
+		return m, func() tea.Msg {
+			err := m.client.SaveImage(context.Background(), reference, outputPath)
+			return actionDoneMsg{message: "saved image " + reference + " to " + outputPath, err: err}
+		}
+	case promptLoadImage:
+		inputPath := strings.TrimSpace(m.promptInput)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if inputPath == "" {
+			m.statusLine = "image load cancelled"
+			return m, nil
+		}
+		m.busy = "loading image archive"
+		m.statusLine = "loading image archive"
+		return m, func() tea.Msg {
+			err := m.client.LoadImage(context.Background(), inputPath)
+			return actionDoneMsg{message: "loaded image archive " + inputPath, err: err}
+		}
 	case promptCreateMachine:
 		image, name, ok := parseCreateMachineInput(m.promptInput)
 		m.prompt = promptNone
@@ -790,6 +856,15 @@ func defaultContainerExportPath(id string) string {
 		return "container.tar"
 	}
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
+	return replacer.Replace(name) + ".tar"
+}
+
+func defaultImageArchivePath(reference string) string {
+	name := strings.TrimSpace(reference)
+	if name == "" {
+		return "image.tar"
+	}
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_", "@", "_")
 	return replacer.Replace(name) + ".tar"
 }
 
@@ -1461,7 +1536,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | O save image | L load image | R run image | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -1502,6 +1577,10 @@ func (m Model) promptLine() string {
 		return "export " + m.promptTarget + " to tar path: " + m.promptInput + "  enter export, ctrl+u clear, esc cancel"
 	case promptExecCommand:
 		return "exec in " + m.promptTarget + ": " + m.promptInput + "  enter run, esc cancel"
+	case promptSaveImage:
+		return "save " + m.promptTarget + " to tar path: " + m.promptInput + "  enter save, ctrl+u clear, esc cancel"
+	case promptLoadImage:
+		return "load image archive path: " + m.promptInput + "  enter load, esc cancel"
 	default:
 		return ""
 	}

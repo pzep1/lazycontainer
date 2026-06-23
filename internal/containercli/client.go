@@ -279,6 +279,28 @@ func (c *Client) PushImage(ctx context.Context, reference string) error {
 	return err
 }
 
+func (c *Client) SaveImage(ctx context.Context, reference string, outputPath string) error {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return errors.New("image reference is required")
+	}
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return errors.New("image archive path is required")
+	}
+	_, err := c.runLong(ctx, "image", "save", "--output", outputPath, reference)
+	return err
+}
+
+func (c *Client) LoadImage(ctx context.Context, inputPath string) error {
+	inputPath = strings.TrimSpace(inputPath)
+	if inputPath == "" {
+		return errors.New("image archive path is required")
+	}
+	_, err := c.runLong(ctx, "image", "load", "--input", inputPath)
+	return err
+}
+
 func (c *Client) Copy(ctx context.Context, source string, destination string) error {
 	source = strings.TrimSpace(source)
 	if source == "" {
