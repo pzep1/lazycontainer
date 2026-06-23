@@ -234,6 +234,15 @@ func (c *Client) TagImage(ctx context.Context, source string, target string) err
 	return err
 }
 
+func (c *Client) PushImage(ctx context.Context, reference string) error {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return errors.New("image reference is required")
+	}
+	_, err := c.runLong(ctx, "image", "push", "--progress", "plain", reference)
+	return err
+}
+
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "start", id)
 	return err

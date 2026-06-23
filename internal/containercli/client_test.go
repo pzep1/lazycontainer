@@ -400,6 +400,20 @@ func TestTagImageUsesSelectedSourceAndTargetReference(t *testing.T) {
 	}
 }
 
+func TestPushImageUsesPlainProgress(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.PushImage(context.Background(), "registry.example.com/alpine:dev"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"image", "push", "--progress", "plain", "registry.example.com/alpine:dev"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestRestartStopsThenStartsContainer(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}

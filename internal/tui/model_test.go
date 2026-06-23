@@ -21,6 +21,7 @@ type fakeClient struct {
 	buildContext   string
 	tagSource      string
 	tagTarget      string
+	pushed         string
 	restarted      string
 	followLogsID   string
 	machineLogsID  string
@@ -175,6 +176,11 @@ func (f *fakeClient) BuildImage(_ context.Context, tag string, contextDir string
 func (f *fakeClient) TagImage(_ context.Context, source string, target string) error {
 	f.tagSource = source
 	f.tagTarget = target
+	return nil
+}
+
+func (f *fakeClient) PushImage(_ context.Context, reference string) error {
+	f.pushed = reference
 	return nil
 }
 
@@ -810,6 +816,35 @@ func TestTagSelectedImagePromptsForTargetReference(t *testing.T) {
 	}
 	if client.tagTarget != "registry.example.com/alpine:dev" {
 		t.Fatalf("expected target image reference, got %q", client.tagTarget)
+	}
+}
+
+func TestPushSelectedImageUsesImageReference(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		images: []containercli.Image{{
+			ID: "abc",
+			Configuration: containercli.ImageConfiguration{
+				Name: "registry.example.com/alpine:dev",
+			},
+		}},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
+	if cmd == nil {
+		t.Fatalf("expected push image command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after push")
+	}
+
+	if client.pushed != "registry.example.com/alpine:dev" {
+		t.Fatalf("expected pushed image reference, got %q", client.pushed)
 	}
 }
 

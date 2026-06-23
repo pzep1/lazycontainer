@@ -38,6 +38,7 @@ type Client interface {
 	RunImage(context.Context, string, string) error
 	BuildImage(context.Context, string, string) error
 	TagImage(context.Context, string, string) error
+	PushImage(context.Context, string) error
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Restart(context.Context, string) error
@@ -354,6 +355,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startRunPrompt()
 	case "t":
 		return m.startTagPrompt()
+	case "P":
+		return m.pushSelectedImage()
 	case "l":
 		return m.logsSelected()
 	case "f":
@@ -921,6 +924,27 @@ func (m Model) restartSelected() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) pushSelectedImage() (tea.Model, tea.Cmd) {
+	if m.active != resourceImages {
+		return m, nil
+	}
+	image, ok := m.selectedImage()
+	if !ok {
+		return m, nil
+	}
+	reference := strings.TrimSpace(image.Name())
+	if reference == "" {
+		m.statusLine = "push cancelled"
+		return m, nil
+	}
+	m.busy = "pushing " + reference
+	m.statusLine = "pushing " + reference
+	return m, func() tea.Msg {
+		err := m.client.PushImage(context.Background(), reference)
+		return actionDoneMsg{message: "pushed image " + reference, err: err}
+	}
+}
+
 func (m Model) lifecycleSelected(busy string, done string, action func(context.Context, string) error) (tea.Model, tea.Cmd) {
 	if m.active == resourceMachines && busy == "stopping" {
 		machine, ok := m.selectedMachine()
@@ -1227,7 +1251,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | R run image | i inspect | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | i inspect | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
