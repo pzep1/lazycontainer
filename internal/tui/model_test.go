@@ -1103,6 +1103,87 @@ func TestCustomCommandPromptRunsConfiguredCommandByUniqueName(t *testing.T) {
 	}
 }
 
+func TestCustomCommandExpandsSelectedContainerPlaceholder(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{
+		CustomCommands: []CustomCommand{{
+			Name: "Container logs",
+			Args: []string{"logs", "--tail", "50", "{container}"},
+		}},
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("db", "docker.io/library/postgres:17")},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{';'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected custom command")
+	}
+	_ = cmd().(outputMsg)
+
+	wantArgs := []string{"logs", "--tail", "50", "db"}
+	if !reflect.DeepEqual(client.commandArgs, wantArgs) {
+		t.Fatalf("command args mismatch\nwant: %#v\n got: %#v", wantArgs, client.commandArgs)
+	}
+}
+
+func TestCustomCommandExpandsActiveResourcePlaceholder(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{
+		CustomCommands: []CustomCommand{{
+			Name: "Inspect resource",
+			Args: []string{"image", "inspect", "{resource}"},
+		}},
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		images: []containercli.Image{{
+			Configuration: containercli.ImageConfiguration{Name: "docker.io/library/postgres:17"},
+		}},
+	})
+	updated = switchTabs(t, updated, 1)
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{';'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected custom command")
+	}
+	_ = cmd().(outputMsg)
+
+	wantArgs := []string{"image", "inspect", "docker.io/library/postgres:17"}
+	if !reflect.DeepEqual(client.commandArgs, wantArgs) {
+		t.Fatalf("command args mismatch\nwant: %#v\n got: %#v", wantArgs, client.commandArgs)
+	}
+}
+
+func TestCustomCommandReportsMissingSelectedPlaceholder(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{
+		CustomCommands: []CustomCommand{{
+			Name: "Container logs",
+			Args: []string{"logs", "{container}"},
+		}},
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{';'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("expected no command")
+	}
+	state := updated.(Model)
+	if state.statusLine != "custom command needs selected container" {
+		t.Fatalf("statusLine = %q", state.statusLine)
+	}
+	if len(client.commandArgs) != 0 {
+		t.Fatalf("command unexpectedly ran: %#v", client.commandArgs)
+	}
+}
+
 func TestCustomCommandPromptRequiresConfiguredCommands(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client)

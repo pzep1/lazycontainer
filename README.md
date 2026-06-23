@@ -125,13 +125,15 @@ lazycont reads optional custom commands from `~/Library/Application Support/lazy
       "args": ["image", "list", "--format", "json"]
     },
     {
-      "name": "System disk usage",
-      "args": ["system", "df"]
+      "name": "Selected container logs",
+      "args": ["logs", "--tail", "200", "{container}"]
     }
   ]
 }
 ```
 
 Press `;` in the TUI and enter a command number, exact name, or unique part of a name. Each entry runs as `container <args>`.
+
+Custom command args can use `{container}`, `{image}`, `{volume}`, `{network}`, `{machine}`, `{registry}`, or `{resource}`. `{resource}` expands to the selected item in the active pane.
 
 Press `o` in the TUI to create this file if needed and open it in your editor.

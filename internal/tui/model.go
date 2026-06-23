@@ -1233,10 +1233,14 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		title := "Custom " + command.Name
+		args, missing, ok := m.expandCustomCommandArgs(command.Args)
+		if !ok {
+			m.statusLine = "custom command needs selected " + missing
+			return m, nil
+		}
 		m.busy = "running " + title
 		m.statusLine = "running " + title
 		m.panelMode = panelInspect
-		args := append([]string(nil), command.Args...)
 		return m, func() tea.Msg {
 			body, err := m.client.Command(context.Background(), args)
 			if strings.TrimSpace(body) == "" && err == nil {
@@ -2702,6 +2706,116 @@ func (m Model) customCommandByInput(input string) (CustomCommand, bool) {
 		}
 	}
 	return match, matches == 1
+}
+
+func (m Model) expandCustomCommandArgs(args []string) ([]string, string, bool) {
+	values := m.customCommandPlaceholderValues()
+	out := make([]string, len(args))
+	for idx, arg := range args {
+		expanded := arg
+		for _, entry := range customCommandPlaceholders() {
+			placeholder := entry.placeholder
+			value := values[placeholder]
+			if strings.Contains(expanded, placeholder) {
+				if value == "" {
+					return nil, entry.label, false
+				}
+				expanded = strings.ReplaceAll(expanded, placeholder, value)
+			}
+		}
+		out[idx] = expanded
+	}
+	return out, "", true
+}
+
+func (m Model) customCommandPlaceholderValues() map[string]string {
+	values := map[string]string{
+		"{container}": "",
+		"{image}":     "",
+		"{volume}":    "",
+		"{network}":   "",
+		"{machine}":   "",
+		"{registry}":  "",
+		"{resource}":  "",
+	}
+	if container, ok := m.selectedContainer(); ok {
+		values["{container}"] = container.Name()
+	}
+	if image, ok := m.selectedImage(); ok {
+		values["{image}"] = image.Name()
+	}
+	if volume, ok := m.selectedVolume(); ok {
+		values["{volume}"] = volume.Name()
+	}
+	if network, ok := m.selectedNetwork(); ok {
+		values["{network}"] = network.Name()
+	}
+	if machine, ok := m.selectedMachine(); ok {
+		values["{machine}"] = machine.Name()
+	}
+	if registry, ok := m.selectedRegistry(); ok {
+		values["{registry}"] = registry.Name()
+	}
+	if resource := m.selectedResourceName(); resource != "" {
+		values["{resource}"] = resource
+	}
+	return values
+}
+
+func (m Model) selectedResourceName() string {
+	switch m.active {
+	case resourceContainers:
+		if container, ok := m.selectedContainer(); ok {
+			return container.Name()
+		}
+	case resourceImages:
+		if image, ok := m.selectedImage(); ok {
+			return image.Name()
+		}
+	case resourceBuilder:
+		if m.builderMatchesFilter() {
+			return m.builder.Name()
+		}
+	case resourceVolumes:
+		if volume, ok := m.selectedVolume(); ok {
+			return volume.Name()
+		}
+	case resourceNetworks:
+		if network, ok := m.selectedNetwork(); ok {
+			return network.Name()
+		}
+	case resourceMachines:
+		if machine, ok := m.selectedMachine(); ok {
+			return machine.Name()
+		}
+	case resourceRegistries:
+		if registry, ok := m.selectedRegistry(); ok {
+			return registry.Name()
+		}
+	case resourceSystem:
+		if m.systemMatchesFilter() {
+			return "system"
+		}
+	}
+	return ""
+}
+
+func customCommandPlaceholders() []struct {
+	placeholder string
+	label       string
+} {
+	return []struct {
+		placeholder string
+		label       string
+	}{
+		{"{container}", "container"},
+		{"{image}", "image"},
+		{"{volume}", "volume"},
+		{"{network}", "network"},
+		{"{machine}", "machine"},
+		{"{registry}", "registry"},
+		{"{resource}", "resource"},
+	}
 }
 
 func (m Model) renderSidebar(width int, height int) string {
