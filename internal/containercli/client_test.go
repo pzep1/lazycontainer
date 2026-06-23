@@ -594,6 +594,21 @@ func TestSetDefaultMachineUsesSelectedMachineID(t *testing.T) {
 	}
 }
 
+func TestSetMachineUsesSelectedMachineAndSettings(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second, LongTimeout: time.Second}
+
+	settings := []string{"cpus=4", "memory=8G", "home-mount=ro"}
+	if err := client.SetMachine(context.Background(), "dev-machine", settings); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"machine", "set", "--name", "dev-machine", "cpus=4", "memory=8G", "home-mount=ro"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestFollowLogsCommandUsesFollowWithTail(t *testing.T) {
 	client := &Client{Binary: "container"}
 

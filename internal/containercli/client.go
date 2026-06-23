@@ -262,6 +262,25 @@ func (c *Client) SetDefaultMachine(ctx context.Context, id string) error {
 	return err
 }
 
+func (c *Client) SetMachine(ctx context.Context, id string, settings []string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("machine id is required")
+	}
+	args := []string{"machine", "set", "--name", id}
+	for _, setting := range settings {
+		setting = strings.TrimSpace(setting)
+		if setting != "" {
+			args = append(args, setting)
+		}
+	}
+	if len(args) == 4 {
+		return errors.New("machine setting is required")
+	}
+	_, err := c.runLong(ctx, args...)
+	return err
+}
+
 func (c *Client) PullImage(ctx context.Context, reference string) error {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {

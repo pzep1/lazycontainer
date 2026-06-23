@@ -43,6 +43,7 @@ type Client interface {
 	MachineShellCommand(string) (*exec.Cmd, error)
 	CreateMachine(context.Context, string, string) error
 	SetDefaultMachine(context.Context, string) error
+	SetMachine(context.Context, string, []string) error
 	PullImage(context.Context, string) error
 	RunImage(context.Context, string, string) error
 	CreateContainer(context.Context, string, string) error
@@ -136,6 +137,7 @@ const (
 	promptCreateVolume
 	promptCreateNetwork
 	promptRegistryLogin
+	promptSetMachine
 )
 
 type pendingConfirm struct {
@@ -426,6 +428,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startExportPrompt()
 	case "M":
 		return m.startCreateMachinePrompt()
+	case "m":
+		return m.startSetMachinePrompt()
 	case "S":
 		return m.setDefaultMachine()
 	case "l":
@@ -639,6 +643,22 @@ func (m Model) startCreateMachinePrompt() (tea.Model, tea.Cmd) {
 	m.promptInput = ""
 	m.promptTarget = ""
 	m.statusLine = "create machine"
+	return m, nil
+}
+
+func (m Model) startSetMachinePrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceMachines {
+		return m, nil
+	}
+	machine, ok := m.selectedMachine()
+	if !ok {
+		return m, nil
+	}
+	id := machine.Name()
+	m.prompt = promptSetMachine
+	m.promptInput = ""
+	m.promptTarget = id
+	m.statusLine = "configure machine " + id
 	return m, nil
 }
 
@@ -975,6 +995,22 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 			}
 			return actionDoneMsg{message: message, err: err}
 		}
+	case promptSetMachine:
+		machine := m.promptTarget
+		settings := parseMachineSettingsInput(m.promptInput)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if strings.TrimSpace(machine) == "" || len(settings) == 0 {
+			m.statusLine = "machine configure cancelled"
+			return m, nil
+		}
+		m.busy = "configuring machine " + machine
+		m.statusLine = "configuring machine " + machine
+		return m, func() tea.Msg {
+			err := m.client.SetMachine(context.Background(), machine, settings)
+			return actionDoneMsg{message: "configured machine " + machine, err: err}
+		}
 	default:
 		return m, nil
 	}
@@ -1031,6 +1067,17 @@ func parseCreateResourceInput(input string) (string, string, bool) {
 		option = fields[1]
 	}
 	return fields[0], option, true
+}
+
+func parseMachineSettingsInput(input string) []string {
+	fields := strings.Fields(strings.TrimSpace(input))
+	settings := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if strings.Contains(field, "=") {
+			settings = append(settings, field)
+		}
+	}
+	return settings
 }
 
 func parseRegistryLoginInput(input string) (string, string, bool) {
@@ -1877,7 +1924,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | O save image | L load image | R run image | N create container | g registry login | C create volume/network | M create machine | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete/logout | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | O save image | L load image | R run image | N create container | g registry login | C create volume/network | M create machine | m machine settings | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete/logout | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -1916,6 +1963,8 @@ func (m Model) promptLine() string {
 		return "copy for " + m.promptTarget + " src dest (:path is selected container): " + m.promptInput + "  enter copy, esc cancel"
 	case promptCreateMachine:
 		return "machine image [name]: " + m.promptInput + "  enter create, name optional, esc cancel"
+	case promptSetMachine:
+		return "machine settings for " + m.promptTarget + ": " + m.promptInput + "  enter set, e.g. cpus=4 memory=8G home-mount=ro, esc cancel"
 	case promptExportContainer:
 		return "export " + m.promptTarget + " to tar path: " + m.promptInput + "  enter export, ctrl+u clear, esc cancel"
 	case promptExecCommand:

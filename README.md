@@ -27,7 +27,7 @@ This is an early usable slice focused on day-to-day container work:
 - log in to and out of registries
 - pull images, create stopped containers, and run selected images as detached containers
 - start, restart, stop, kill, and delete containers
-- create, stop, delete, and set default machines
+- create, configure, stop, delete, and set default machines
 - create volumes and networks
 - start and stop Apple container services
 - prune stopped containers and unused images, volumes, or networks
@@ -72,6 +72,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `N` | Create a stopped container from the selected image, with an optional name |
 | `g` | Log in to a registry from the registries pane as `<server> [username]` |
 | `M` | Create a machine from the machines pane as `<image> [name]` |
+| `m` | Configure selected machine as `cpus=4 memory=8G home-mount=ro` |
 | `S` | Set selected machine as the default machine |
 | `C` | Create a volume as `<name> [size]` or network as `<name> [subnet]` from its pane |
 | `i` / `enter` | Inspect selected resource |

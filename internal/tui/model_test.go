@@ -13,53 +13,55 @@ import (
 )
 
 type fakeClient struct {
-	started        string
-	pulled         string
-	runImage       string
-	runName        string
-	createImage    string
-	createName     string
-	buildTag       string
-	buildContext   string
-	tagSource      string
-	tagTarget      string
-	pushed         string
-	savedImage     string
-	saveOutput     string
-	loadedImage    string
-	copySource     string
-	copyDest       string
-	exportID       string
-	exportOutput   string
-	restarted      string
-	followLogsID   string
-	execID         string
-	execCommand    string
-	machineLogsID  string
-	machineShellID string
-	machineImage   string
-	machineName    string
-	defaultMachine string
-	stoppedMachine string
-	registryLogin  string
-	registryUser   string
-	registryLogout string
-	builderStarted bool
-	builderStopped bool
-	builderDeleted bool
-	systemLogsRead bool
-	systemFollowed bool
-	systemStarted  bool
-	systemStopped  bool
-	deleted        string
-	createdVolume  string
-	volumeSize     string
-	createdNetwork string
-	networkSubnet  string
-	deletedVolume  string
-	deletedNetwork string
-	deletedMachine string
-	pruned         string
+	started         string
+	pulled          string
+	runImage        string
+	runName         string
+	createImage     string
+	createName      string
+	buildTag        string
+	buildContext    string
+	tagSource       string
+	tagTarget       string
+	pushed          string
+	savedImage      string
+	saveOutput      string
+	loadedImage     string
+	copySource      string
+	copyDest        string
+	exportID        string
+	exportOutput    string
+	restarted       string
+	followLogsID    string
+	execID          string
+	execCommand     string
+	machineLogsID   string
+	machineShellID  string
+	machineImage    string
+	machineName     string
+	machineSetID    string
+	machineSettings []string
+	defaultMachine  string
+	stoppedMachine  string
+	registryLogin   string
+	registryUser    string
+	registryLogout  string
+	builderStarted  bool
+	builderStopped  bool
+	builderDeleted  bool
+	systemLogsRead  bool
+	systemFollowed  bool
+	systemStarted   bool
+	systemStopped   bool
+	deleted         string
+	createdVolume   string
+	volumeSize      string
+	createdNetwork  string
+	networkSubnet   string
+	deletedVolume   string
+	deletedNetwork  string
+	deletedMachine  string
+	pruned          string
 }
 
 func (f *fakeClient) SystemStatus(context.Context) (containercli.SystemStatus, error) {
@@ -260,6 +262,12 @@ func (f *fakeClient) CreateMachine(_ context.Context, image string, name string)
 
 func (f *fakeClient) SetDefaultMachine(_ context.Context, id string) error {
 	f.defaultMachine = id
+	return nil
+}
+
+func (f *fakeClient) SetMachine(_ context.Context, id string, settings []string) error {
+	f.machineSetID = id
+	f.machineSettings = append([]string(nil), settings...)
 	return nil
 }
 
@@ -1115,6 +1123,37 @@ func TestCreateMachinePromptUsesImageAndOptionalName(t *testing.T) {
 	}
 	if client.machineName != "dev-machine" {
 		t.Fatalf("expected machine name dev-machine, got %q", client.machineName)
+	}
+}
+
+func TestSetMachinePromptUsesSelectedMachineAndSettings(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(msg)
+	updated = switchToMachines(t, updated)
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	for _, r := range "cpus=4 memory=8G home-mount=ro ignored" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected set machine command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after set machine")
+	}
+
+	if client.machineSetID != "dev-machine" {
+		t.Fatalf("expected machine set target dev-machine, got %q", client.machineSetID)
+	}
+	wantSettings := []string{"cpus=4", "memory=8G", "home-mount=ro"}
+	if strings.Join(client.machineSettings, " ") != strings.Join(wantSettings, " ") {
+		t.Fatalf("settings mismatch\nwant: %#v\n got: %#v", wantSettings, client.machineSettings)
 	}
 }
 
