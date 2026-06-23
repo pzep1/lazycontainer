@@ -186,6 +186,23 @@ func TestShellCommandUsesInteractiveTTYExec(t *testing.T) {
 	}
 }
 
+func TestFollowLogsCommandUsesFollowWithTail(t *testing.T) {
+	client := &Client{Binary: "container"}
+
+	cmd, err := client.FollowLogsCommand("db", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"logs", "--follow", "-n", "200", "db"}
+	if cmd.Args[0] != "container" {
+		t.Fatalf("expected container binary, got %q", cmd.Args[0])
+	}
+	if !reflect.DeepEqual(cmd.Args[1:], wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, cmd.Args[1:])
+	}
+}
+
 func TestPullImageUsesPlainProgress(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}

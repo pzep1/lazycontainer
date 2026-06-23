@@ -16,6 +16,7 @@ type fakeClient struct {
 	pulled         string
 	runImage       string
 	runName        string
+	followLogsID   string
 	deleted        string
 	deletedVolume  string
 	deletedNetwork string
@@ -82,6 +83,11 @@ func (f *fakeClient) Stats(context.Context, ...string) ([]containercli.Stat, err
 
 func (f *fakeClient) Logs(context.Context, string, int) (string, error) {
 	return "ready\n", nil
+}
+
+func (f *fakeClient) FollowLogsCommand(id string, _ int) (*exec.Cmd, error) {
+	f.followLogsID = id
+	return exec.Command("true"), nil
 }
 
 func (f *fakeClient) InspectContainer(context.Context, string) (string, error) {
@@ -282,6 +288,27 @@ func TestShellRequiresRunningContainer(t *testing.T) {
 	view := updated.View()
 	if !strings.Contains(view, "start db before opening a shell") {
 		t.Fatalf("view did not explain shell guard:\n%s", view)
+	}
+}
+
+func TestFollowLogsUsesSelectedContainer(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainer("api-service", "docker.io/library/alpine:latest"),
+			testContainer("db", "docker.io/library/postgres:17"),
+		},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatalf("expected follow logs exec command")
+	}
+	if client.followLogsID != "db" {
+		t.Fatalf("expected selected container db, got %q", client.followLogsID)
 	}
 }
 

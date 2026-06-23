@@ -9,6 +9,7 @@ This is an early usable slice focused on day-to-day container work:
 - filter resource lists across names and metadata
 - inspect selected resources
 - tail container logs
+- follow container logs in the terminal
 - pull images and run selected images as detached containers
 - start, stop, kill, and delete containers
 - delete or prune images
@@ -45,6 +46,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `R` | Run the selected image detached, with an optional name |
 | `i` / `enter` | Inspect selected resource |
 | `l` | Tail selected container logs |
+| `f` | Follow selected container logs until the command exits |
 | `e` | Open `/bin/sh` in the selected running container |
 | `s` | Start selected container |
 | `x` | Stop selected container |

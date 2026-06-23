@@ -23,6 +23,7 @@ type Client interface {
 	Networks(context.Context) ([]containercli.NetworkResource, error)
 	Stats(context.Context, ...string) ([]containercli.Stat, error)
 	Logs(context.Context, string, int) (string, error)
+	FollowLogsCommand(string, int) (*exec.Cmd, error)
 	InspectContainer(context.Context, string) (string, error)
 	InspectImage(context.Context, string) (string, error)
 	InspectVolume(context.Context, string) (string, error)
@@ -151,6 +152,11 @@ type shellFinishedMsg struct {
 	err error
 }
 
+type followLogsFinishedMsg struct {
+	id  string
+	err error
+}
+
 func New(client Client) Model {
 	return Model{
 		client:     client,
@@ -220,6 +226,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.statusLine = "shell exited " + msg.id
+		return m, m.refreshCmd()
+	case followLogsFinishedMsg:
+		m.busy = ""
+		m.err = msg.err
+		if msg.err != nil {
+			m.statusLine = msg.err.Error()
+			return m, nil
+		}
+		m.statusLine = "log follow exited " + msg.id
 		return m, m.refreshCmd()
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -296,6 +311,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startRunPrompt()
 	case "l":
 		return m.logsSelected()
+	case "f":
+		return m.followLogsSelected()
 	case "e":
 		return m.shellSelected()
 	case "s":
@@ -609,6 +626,28 @@ func (m Model) logsSelected() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) followLogsSelected() (tea.Model, tea.Cmd) {
+	if m.active != resourceContainers {
+		return m, nil
+	}
+	container, ok := m.selectedContainer()
+	if !ok {
+		return m, nil
+	}
+	id := container.Name()
+	cmd, err := m.client.FollowLogsCommand(id, 200)
+	if err != nil {
+		m.err = err
+		m.statusLine = err.Error()
+		return m, nil
+	}
+	m.busy = "following logs " + id
+	m.statusLine = "following logs " + id
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return followLogsFinishedMsg{id: id, err: err}
+	})
+}
+
 func (m Model) shellSelected() (tea.Model, tea.Cmd) {
 	if m.active != resourceContainers {
 		return m, nil
@@ -905,7 +944,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | a pull image | R run image | r refresh | i inspect | l logs | e shell | s start | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | a pull image | R run image | r refresh | i inspect | l logs | f follow logs | e shell | s start | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -918,7 +957,7 @@ func (m Model) renderFooter() string {
 	if m.err != nil {
 		return footerStyle.Width(m.width).Foreground(colorRed).Render(truncate(status, m.width-2))
 	}
-	return footerStyle.Width(m.width).Render(truncate(status+" | ? help", m.width-2))
+	return footerStyle.Width(m.width).Render(truncate(status+" | f follow | ? help", m.width-2))
 }
 
 func (m Model) promptLine() string {

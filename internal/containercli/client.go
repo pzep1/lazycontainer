@@ -91,6 +91,16 @@ func (c *Client) Logs(ctx context.Context, id string, lines int) (string, error)
 	return string(output), err
 }
 
+func (c *Client) FollowLogsCommand(id string, lines int) (*exec.Cmd, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, errors.New("container id is required")
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	return exec.Command(c.binaryName(), "logs", "--follow", "-n", fmt.Sprintf("%d", lines), id), nil
+}
+
 func (c *Client) InspectContainer(ctx context.Context, id string) (string, error) {
 	if strings.TrimSpace(id) == "" {
 		return "", errors.New("container id is required")
