@@ -22,6 +22,8 @@ type fakeClient struct {
 	tagSource      string
 	tagTarget      string
 	pushed         string
+	copySource     string
+	copyDest       string
 	restarted      string
 	followLogsID   string
 	machineLogsID  string
@@ -181,6 +183,12 @@ func (f *fakeClient) TagImage(_ context.Context, source string, target string) e
 
 func (f *fakeClient) PushImage(_ context.Context, reference string) error {
 	f.pushed = reference
+	return nil
+}
+
+func (f *fakeClient) Copy(_ context.Context, source string, destination string) error {
+	f.copySource = source
+	f.copyDest = destination
 	return nil
 }
 
@@ -845,6 +853,66 @@ func TestPushSelectedImageUsesImageReference(t *testing.T) {
 
 	if client.pushed != "registry.example.com/alpine:dev" {
 		t.Fatalf("expected pushed image reference, got %q", client.pushed)
+	}
+}
+
+func TestCopySelectedContainerExpandsContainerSource(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("db", "docker.io/library/postgres:17")},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	for _, r := range ":/etc/hosts ./hosts" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected copy command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after copy")
+	}
+
+	if client.copySource != "db:/etc/hosts" {
+		t.Fatalf("expected selected container source, got %q", client.copySource)
+	}
+	if client.copyDest != "./hosts" {
+		t.Fatalf("expected local destination, got %q", client.copyDest)
+	}
+}
+
+func TestCopySelectedContainerExpandsContainerDestination(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("db", "docker.io/library/postgres:17")},
+	})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	for _, r := range "./config.json :/app/config.json" {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected copy command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after copy")
+	}
+
+	if client.copySource != "./config.json" {
+		t.Fatalf("expected local source, got %q", client.copySource)
+	}
+	if client.copyDest != "db:/app/config.json" {
+		t.Fatalf("expected selected container destination, got %q", client.copyDest)
 	}
 }
 

@@ -13,6 +13,7 @@ This is an early usable slice focused on day-to-day container work:
 - tail container or machine logs
 - follow container or machine logs in the terminal
 - view container CPU, memory, network, disk, and process metrics
+- copy files or folders between a selected container and the local filesystem
 - build local images from a Dockerfile or Containerfile
 - retag selected images
 - push selected images to a registry
@@ -57,6 +58,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `P` | Push selected image to its registry |
 | `R` | Run the selected image detached, with an optional name |
 | `i` / `enter` | Inspect selected resource |
+| `c` | Copy files for the selected container as `<src> <dest>`; use `:/path` for the selected container |
 | `l` | Tail selected container or machine logs |
 | `f` | Follow selected container or machine logs until the command exits |
 | `e` | Open `/bin/sh` in the selected running container, or a shell in the selected machine |

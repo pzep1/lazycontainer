@@ -39,6 +39,7 @@ type Client interface {
 	BuildImage(context.Context, string, string) error
 	TagImage(context.Context, string, string) error
 	PushImage(context.Context, string) error
+	Copy(context.Context, string, string) error
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Restart(context.Context, string) error
@@ -96,6 +97,7 @@ const (
 	promptRunImage
 	promptBuildImage
 	promptTagImage
+	promptCopy
 )
 
 type pendingConfirm struct {
@@ -357,6 +359,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startTagPrompt()
 	case "P":
 		return m.pushSelectedImage()
+	case "c":
+		return m.startCopyPrompt()
 	case "l":
 		return m.logsSelected()
 	case "f":
@@ -437,6 +441,22 @@ func (m Model) startTagPrompt() (tea.Model, tea.Cmd) {
 	m.promptInput = ""
 	m.promptTarget = image.Name()
 	m.statusLine = "tag image " + image.Name()
+	return m, nil
+}
+
+func (m Model) startCopyPrompt() (tea.Model, tea.Cmd) {
+	if m.active != resourceContainers {
+		return m, nil
+	}
+	container, ok := m.selectedContainer()
+	if !ok {
+		return m, nil
+	}
+	id := container.Name()
+	m.prompt = promptCopy
+	m.promptInput = ""
+	m.promptTarget = id
+	m.statusLine = "copy files for " + id
 	return m, nil
 }
 
@@ -585,6 +605,22 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 			err := m.client.TagImage(context.Background(), source, target)
 			return actionDoneMsg{message: "tagged image " + target, err: err}
 		}
+	case promptCopy:
+		container := m.promptTarget
+		source, destination, ok := parseCopyInput(m.promptInput, container)
+		m.prompt = promptNone
+		m.promptInput = ""
+		m.promptTarget = ""
+		if strings.TrimSpace(container) == "" || !ok {
+			m.statusLine = "copy cancelled"
+			return m, nil
+		}
+		m.busy = "copying files for " + container
+		m.statusLine = "copying files for " + container
+		return m, func() tea.Msg {
+			err := m.client.Copy(context.Background(), source, destination)
+			return actionDoneMsg{message: "copied files for " + container, err: err}
+		}
 	default:
 		return m, nil
 	}
@@ -602,6 +638,21 @@ func parseBuildImageInput(input string) (string, string) {
 		contextDir = "."
 	}
 	return tag, contextDir
+}
+
+func parseCopyInput(input string, container string) (string, string, bool) {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) != 2 || strings.TrimSpace(container) == "" {
+		return "", "", false
+	}
+	return expandSelectedContainerPath(fields[0], container), expandSelectedContainerPath(fields[1], container), true
+}
+
+func expandSelectedContainerPath(path string, container string) string {
+	if strings.HasPrefix(path, ":") {
+		return strings.TrimSpace(container) + path
+	}
+	return path
 }
 
 func (m Model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
@@ -1251,7 +1302,7 @@ func (m Model) renderFooter() string {
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
 	if m.showHelp {
-		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | i inspect | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
+		help := "tab switch | / filter | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | R run image | i inspect | c copy files | l logs | f follow logs | e shell | s start | ctrl+r restart | x stop | K kill | d delete | p prune | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine
@@ -1284,6 +1335,8 @@ func (m Model) promptLine() string {
 		return "build image tag [context-dir]: " + m.promptInput + "  enter build, context defaults ., esc cancel"
 	case promptTagImage:
 		return "new tag for " + m.promptTarget + ": " + m.promptInput + "  enter tag, esc cancel"
+	case promptCopy:
+		return "copy for " + m.promptTarget + " src dest (:path is selected container): " + m.promptInput + "  enter copy, esc cancel"
 	default:
 		return ""
 	}

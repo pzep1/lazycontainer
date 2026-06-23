@@ -243,6 +243,19 @@ func (c *Client) PushImage(ctx context.Context, reference string) error {
 	return err
 }
 
+func (c *Client) Copy(ctx context.Context, source string, destination string) error {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return errors.New("copy source is required")
+	}
+	destination = strings.TrimSpace(destination)
+	if destination == "" {
+		return errors.New("copy destination is required")
+	}
+	_, err := c.runLong(ctx, "copy", source, destination)
+	return err
+}
+
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "start", id)
 	return err

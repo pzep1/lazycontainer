@@ -414,6 +414,20 @@ func TestPushImageUsesPlainProgress(t *testing.T) {
 	}
 }
 
+func TestCopyUsesSourceAndDestination(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	if err := client.Copy(context.Background(), "db:/etc/hosts", "./hosts"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"copy", "db:/etc/hosts", "./hosts"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestRestartStopsThenStartsContainer(t *testing.T) {
 	runner := &fakeRunner{}
 	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
