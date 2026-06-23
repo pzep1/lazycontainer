@@ -35,9 +35,11 @@ type fakeClient struct {
 	exportOutput    string
 	restarted       string
 	followLogsID    string
+	followLogsCount int
 	logsRead        int
 	execID          string
 	execCommand     string
+	topID           string
 	commandArgs     []string
 	machineLogsID   string
 	machineLogsRead int
@@ -203,7 +205,8 @@ func (f *fakeClient) Logs(context.Context, string, int) (string, error) {
 
 func (f *fakeClient) FollowLogsCommand(id string, _ int) (*exec.Cmd, error) {
 	f.followLogsID = id
-	return exec.Command("true"), nil
+	f.followLogsCount++
+	return exec.Command("printf", "container ready\n"), nil
 }
 
 func (f *fakeClient) MachineLogs(_ context.Context, id string, _ int) (string, error) {
@@ -214,7 +217,7 @@ func (f *fakeClient) MachineLogs(_ context.Context, id string, _ int) (string, e
 
 func (f *fakeClient) FollowMachineLogsCommand(id string, _ int) (*exec.Cmd, error) {
 	f.machineLogsID = id
-	return exec.Command("true"), nil
+	return exec.Command("printf", "machine ready\n"), nil
 }
 
 func (f *fakeClient) SystemLogs(context.Context, string) (string, error) {
@@ -225,7 +228,7 @@ func (f *fakeClient) SystemLogs(context.Context, string) (string, error) {
 
 func (f *fakeClient) FollowSystemLogsCommand(string) (*exec.Cmd, error) {
 	f.systemFollowed = true
-	return exec.Command("true"), nil
+	return exec.Command("printf", "system ready\n"), nil
 }
 
 func (f *fakeClient) InspectContainer(context.Context, string) (string, error) {
@@ -258,9 +261,19 @@ func (f *fakeClient) Exec(_ context.Context, id string, command string) (string,
 	return "ok\n", nil
 }
 
+func (f *fakeClient) Top(_ context.Context, id string) (string, error) {
+	f.topID = id
+	return "UID PID PPID CMD\nroot 1 0 /bin/sh\n", nil
+}
+
 func (f *fakeClient) Command(_ context.Context, args []string) (string, error) {
 	f.commandArgs = append([]string(nil), args...)
 	return "command output\n", nil
+}
+
+func (f *fakeClient) CommandProcess(args []string) (*exec.Cmd, error) {
+	f.commandArgs = append([]string(nil), args...)
+	return exec.Command("true"), nil
 }
 
 func (f *fakeClient) MachineShellCommand(id string) (*exec.Cmd, error) {
@@ -505,7 +518,7 @@ func TestMouseClickSelectsVisibleContainerRow(t *testing.T) {
 	if state.containerCursor != 1 {
 		t.Fatalf("container cursor mismatch: %d", state.containerCursor)
 	}
-	if !strings.Contains(state.View(), "Details api") {
+	if !strings.Contains(state.View(), "ID:       api") {
 		t.Fatalf("view did not show clicked container details:\n%s", state.View())
 	}
 }
@@ -531,7 +544,7 @@ func TestMouseClickSelectsResourceTab(t *testing.T) {
 	if state.active != resourceNetworks {
 		t.Fatalf("active resource mismatch: %v", state.active)
 	}
-	if !strings.Contains(state.View(), "Details default") {
+	if !strings.Contains(state.View(), "Name:       default") {
 		t.Fatalf("view did not show clicked tab details:\n%s", state.View())
 	}
 }
@@ -540,7 +553,7 @@ func TestMouseWheelScrollsPanel(t *testing.T) {
 	model := New(&fakeClient{})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 16})
 	state := updated.(Model)
-	state.panelMode = panelInspect
+	state.bufferKind = bufOutput
 	state.panelTitle = "Long output"
 	lines := make([]string, 40)
 	for idx := range lines {
@@ -567,6 +580,16 @@ func TestMouseWheelScrollsPanel(t *testing.T) {
 	}
 }
 
+// withTab returns the model with the given resource's main-panel tab selected.
+func withTab(state Model, kind resourceKind, tab mainTab) Model {
+	for i, t := range tabsFor(kind) {
+		if t == tab {
+			state.tabIndex[kind] = i
+		}
+	}
+	return state
+}
+
 func TestContainerDetailsShowMetricSummary(t *testing.T) {
 	model := New(&fakeClient{})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 34})
@@ -588,7 +611,7 @@ func TestContainerDetailsShowMetricSummary(t *testing.T) {
 		}},
 	})
 
-	view := updated.View()
+	view := withTab(updated.(Model), resourceContainers, tabStats).View()
 	for _, want := range []string{"Stats", "CPU time: 1.2s", "Memory:", "[#---------------]", "Network:", "PIDs:     3"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view did not include %q:\n%s", want, view)
@@ -659,11 +682,200 @@ func TestContainerDetailsShowMetricHistory(t *testing.T) {
 		}},
 	})
 
-	view := updated.View()
-	for _, want := range []string{"History:  last 2 samples", "CPU %:    .@", "Memory:   .@", "Network:  .@", "Block IO: .@"} {
+	view := withTab(updated.(Model), resourceContainers, tabStats).View()
+	for _, want := range []string{"CPU %", "cur 80.0%", "max 100.0%", "Memory", "█", "Current"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view did not include %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestTabCycleSwitchesMainPanel(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+		},
+	})
+	state := updated.(Model)
+	if state.activeMainTab() != tabConfig {
+		t.Fatalf("expected default tab Config, got %v", state.activeMainTab())
+	}
+	updated, cmd := state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	state = updated.(Model)
+	if state.activeMainTab() != tabLogs {
+		t.Fatalf("expected Logs tab after ], got %v", state.activeMainTab())
+	}
+	if cmd == nil {
+		t.Fatalf("expected a fetch command when entering Logs tab")
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	state = updated.(Model)
+	if state.activeMainTab() != tabConfig {
+		t.Fatalf("expected Config tab after [, got %v", state.activeMainTab())
+	}
+}
+
+func TestInspectTabFetchesContainerJSON(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("db", "docker.io/library/postgres:17")},
+	})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd == nil {
+		t.Fatalf("expected inspect fetch command")
+	}
+	state := updated.(Model)
+	if state.activeMainTab() != tabInspect {
+		t.Fatalf("expected Inspect tab, got %v", state.activeMainTab())
+	}
+	msg := cmd().(tabFetchedMsg)
+	updated, _ = state.Update(msg)
+	if !strings.Contains(updated.View(), `"id":"db"`) {
+		t.Fatalf("inspect tab did not show JSON:\n%s", updated.View())
+	}
+}
+
+func TestEnvTabShowsContainerEnvironment(t *testing.T) {
+	c := testContainer("web", "docker.io/library/nginx:latest")
+	c.Configuration.InitProcess.Environment = []string{"PATH=/usr/bin", "FOO=bar"}
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{c},
+	})
+	view := withTab(updated.(Model), resourceContainers, tabEnv).View()
+	for _, want := range []string{"PATH=/usr/bin", "FOO=bar"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("env tab missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestTopTabFetchesProcesses(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainerWithState("web", "docker.io/library/nginx:latest", "running")},
+	})
+	state := withTab(updated.(Model), resourceContainers, tabTop)
+	cmd := state.ensureBufferCmd()
+	if cmd == nil {
+		t.Fatalf("expected top fetch command")
+	}
+	msg := cmd().(tabFetchedMsg)
+	updated, _ = state.Update(msg)
+	if client.topID != "web" {
+		t.Fatalf("expected top target web, got %q", client.topID)
+	}
+	if !strings.Contains(updated.View(), "PID") {
+		t.Fatalf("top tab did not show processes:\n%s", updated.View())
+	}
+}
+
+func TestScreenModeCyclesAndFullscreenHidesSidebar(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("web", "docker.io/library/nginx:latest")},
+	})
+	state := updated.(Model)
+	if state.sidebarWidth() <= 0 {
+		t.Fatalf("expected a sidebar in normal mode")
+	}
+	if !strings.Contains(state.View(), "volumes") {
+		t.Fatalf("expected sidebar labels in normal mode")
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	state = updated.(Model)
+	if state.screenMode != screenHalf {
+		t.Fatalf("expected half mode, got %v", state.screenMode)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	state = updated.(Model)
+	if state.screenMode != screenFull {
+		t.Fatalf("expected fullscreen, got %v", state.screenMode)
+	}
+	if state.sidebarWidth() != 0 {
+		t.Fatalf("expected hidden sidebar in fullscreen, got width %d", state.sidebarWidth())
+	}
+	if strings.Contains(state.View(), "volumes") {
+		t.Fatalf("expected sidebar hidden in fullscreen:\n%s", state.View())
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	if updated.(Model).screenMode != screenNormal {
+		t.Fatalf("expected wrap back to normal")
+	}
+
+	// _ cycles backwards.
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'_'}})
+	if updated.(Model).screenMode != screenFull {
+		t.Fatalf("expected _ to step back to fullscreen, got %v", updated.(Model).screenMode)
+	}
+}
+
+func TestConfigEditReloadsThemeAndSettings(t *testing.T) {
+	model := NewWithOptions(&fakeClient{}, Options{
+		ReloadConfig: func() (Options, error) {
+			return Options{
+				CustomCommands:  []CustomCommand{{Name: "Ver", Args: []string{"version"}}},
+				ScreenMode:      "fullscreen",
+				SidePanelWidth:  0.5,
+				LogsTail:        999,
+				LogsSince:       "1h",
+				RefreshInterval: 3 * time.Second,
+			}, nil
+		},
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	updated, _ = updated.Update(configEditedMsg{path: "/tmp/config.json"})
+	state := updated.(Model)
+	if state.screenMode != screenFull {
+		t.Fatalf("expected screen mode reloaded, got %v", state.screenMode)
+	}
+	if state.logsTail != 999 || state.logsSince != "1h" {
+		t.Fatalf("expected logs settings reloaded: tail=%d since=%q", state.logsTail, state.logsSince)
+	}
+	if state.refreshInterval != 3*time.Second {
+		t.Fatalf("expected refresh interval reloaded, got %v", state.refreshInterval)
+	}
+	if len(state.customCommands) != 1 || state.customCommands[0].Name != "Ver" {
+		t.Fatalf("expected commands reloaded, got %#v", state.customCommands)
+	}
+}
+
+func TestActionErrorKeepsCachedTabContent(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{testContainer("db", "docker.io/library/postgres:17")},
+	})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ = updated.Update(cmd().(tabFetchedMsg))
+	state := updated.(Model)
+	if state.bufferKind != bufTab {
+		t.Fatalf("expected inspect content loaded")
+	}
+
+	updated, _ = state.Update(actionDoneMsg{message: "x", err: fmt.Errorf("boom")})
+	state = updated.(Model)
+	if state.bufferKind != bufTab {
+		t.Fatalf("action error should keep cached tab content, got bufferKind %v", state.bufferKind)
+	}
+	if !strings.Contains(state.View(), `"id":"db"`) {
+		t.Fatalf("expected cached inspect still visible after error:\n%s", state.View())
 	}
 }
 
@@ -791,15 +1003,14 @@ func TestSystemPaneShowsDiagnosticsLogsAndLifecycleActions(t *testing.T) {
 
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
-		t.Fatalf("expected system logs command")
+		t.Fatalf("expected system logs stream command")
 	}
-	logs := cmd().(outputMsg)
-	updated, _ = updated.Update(logs)
-	if !client.systemLogsRead {
-		t.Fatalf("expected system logs call")
+	if !client.systemFollowed {
+		t.Fatalf("expected system logs follow stream")
 	}
+	updated = drainStream(t, updated, cmd)
 	if !strings.Contains(updated.View(), "system ready") {
-		t.Fatalf("view did not show system logs:\n%s", updated.View())
+		t.Fatalf("view did not show streamed system logs:\n%s", updated.View())
 	}
 
 	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
@@ -1394,7 +1605,7 @@ func TestFollowLogsUsesSelectedContainer(t *testing.T) {
 	}
 }
 
-func TestManualRefreshReloadsActiveContainerLogs(t *testing.T) {
+func TestLogsTabStreamsSelectedContainer(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
@@ -1406,34 +1617,30 @@ func TestManualRefreshReloadsActiveContainerLogs(t *testing.T) {
 	})
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
-		t.Fatalf("expected initial logs command")
+		t.Fatalf("expected log stream command")
 	}
-	updated, _ = updated.Update(cmd().(outputMsg))
-	if client.logsRead != 1 {
-		t.Fatalf("expected one initial logs call, got %d", client.logsRead)
+	if client.followLogsID != "api-service" {
+		t.Fatalf("expected stream target api-service, got %q", client.followLogsID)
+	}
+	if client.followLogsCount != 1 {
+		t.Fatalf("expected one follow stream, got %d", client.followLogsCount)
+	}
+	updated = drainStream(t, updated, cmd)
+	if !strings.Contains(updated.View(), "container ready") {
+		t.Fatalf("view did not show streamed logs:\n%s", updated.View())
 	}
 
-	_, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	if cmd == nil {
+	// Manual refresh keeps the existing stream rather than restarting it.
+	_, rcmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if rcmd == nil {
 		t.Fatalf("expected refresh command")
 	}
-	msg := cmd()
-	batch, ok := msg.(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("expected refresh/logs batch, got %T", msg)
-	}
-	if len(batch) != 2 {
-		t.Fatalf("expected snapshot and logs commands, got %d", len(batch))
-	}
-	if _, ok := batch[1]().(outputMsg); !ok {
-		t.Fatalf("expected logs output message")
-	}
-	if client.logsRead != 2 {
-		t.Fatalf("expected logs to reload during manual refresh, got %d calls", client.logsRead)
+	if client.followLogsCount != 1 {
+		t.Fatalf("expected stream not to restart on refresh, got %d", client.followLogsCount)
 	}
 }
 
-func TestAutoRefreshReloadsActiveContainerLogs(t *testing.T) {
+func TestAutoRefreshKeepsLogStreamRunning(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client)
 	model.refreshInterval = time.Nanosecond
@@ -1446,30 +1653,27 @@ func TestAutoRefreshReloadsActiveContainerLogs(t *testing.T) {
 	})
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
-		t.Fatalf("expected initial logs command")
+		t.Fatalf("expected log stream command")
 	}
-	updated, _ = updated.Update(cmd().(outputMsg))
-	if client.logsRead != 1 {
-		t.Fatalf("expected one initial logs call, got %d", client.logsRead)
+	updated = drainStream(t, updated, cmd)
+	if client.followLogsCount != 1 {
+		t.Fatalf("expected one follow stream, got %d", client.followLogsCount)
 	}
 
 	_, cmd = updated.Update(autoRefreshMsg(time.Now()))
 	if cmd == nil {
 		t.Fatalf("expected auto-refresh command")
 	}
-	msg := cmd()
-	batch, ok := msg.(tea.BatchMsg)
+	batch, ok := cmd().(tea.BatchMsg)
 	if !ok {
-		t.Fatalf("expected refresh/logs/tick batch, got %T", msg)
+		t.Fatalf("expected refresh/tick batch, got %T", cmd())
 	}
-	if len(batch) != 3 {
-		t.Fatalf("expected snapshot, logs, and next tick commands, got %d", len(batch))
+	// Snapshot + next tick only; the live stream is not re-fetched on refresh.
+	if len(batch) != 2 {
+		t.Fatalf("expected snapshot and tick commands, got %d", len(batch))
 	}
-	if _, ok := batch[1]().(outputMsg); !ok {
-		t.Fatalf("expected logs output message")
-	}
-	if client.logsRead != 2 {
-		t.Fatalf("expected logs to reload during auto-refresh, got %d calls", client.logsRead)
+	if client.followLogsCount != 1 {
+		t.Fatalf("expected stream not to restart on auto-refresh, got %d", client.followLogsCount)
 	}
 }
 
@@ -1491,15 +1695,14 @@ func TestMachinePaneShowsAndActionsUseSelectedMachine(t *testing.T) {
 
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
-		t.Fatalf("expected machine logs command")
+		t.Fatalf("expected machine logs stream command")
 	}
-	logs := cmd().(outputMsg)
-	updated, _ = updated.Update(logs)
 	if client.machineLogsID != "dev-machine" {
 		t.Fatalf("expected machine log target dev-machine, got %q", client.machineLogsID)
 	}
+	updated = drainStream(t, updated, cmd)
 	if !strings.Contains(updated.View(), "machine ready") {
-		t.Fatalf("view did not show machine logs:\n%s", updated.View())
+		t.Fatalf("view did not show streamed machine logs:\n%s", updated.View())
 	}
 
 	client.machineLogsID = ""
@@ -2237,6 +2440,26 @@ func switchTabs(t *testing.T, model tea.Model, count int) tea.Model {
 		}
 	}
 	return updated
+}
+
+// drainStream pumps log-stream read commands until the stream ends, returning
+// the model with all streamed lines applied.
+func drainStream(t *testing.T, model tea.Model, cmd tea.Cmd) tea.Model {
+	t.Helper()
+	for i := 0; cmd != nil && i < 200; i++ {
+		msg := cmd()
+		lsm, ok := msg.(logStreamMsg)
+		if !ok {
+			t.Fatalf("expected logStreamMsg, got %T", msg)
+		}
+		var next tea.Cmd
+		model, next = model.Update(lsm)
+		cmd = next
+		if lsm.done {
+			break
+		}
+	}
+	return model
 }
 
 func tabClickPoint(t *testing.T, model Model, target resourceKind) (int, int) {

@@ -101,6 +101,22 @@ func (c Container) Platform() string {
 	return formatPlatform(c.Configuration.Platform)
 }
 
+// FirstPublishedURL returns an http URL for the container's first published
+// port, assuming an HTTP service (matching lazydocker's open-in-browser).
+func (c Container) FirstPublishedURL() (string, bool) {
+	for _, port := range c.Configuration.PublishedPorts {
+		if port.HostPort <= 0 {
+			continue
+		}
+		host := port.HostAddress
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "localhost"
+		}
+		return fmt.Sprintf("http://%s:%d", host, port.HostPort), true
+	}
+	return "", false
+}
+
 func (c Container) Memory() string {
 	return FormatBytes(c.Configuration.Resources.MemoryInBytes)
 }

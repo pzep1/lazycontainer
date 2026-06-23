@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	appconfig "github.com/pzep1/lazycont/internal/config"
 	"github.com/pzep1/lazycont/internal/tui"
@@ -87,24 +88,60 @@ func TestConfigWarningIncludesPathWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestCustomCommandsCopiesConfigCommands(t *testing.T) {
-	commands := []appconfig.Command{{
-		Name: "Images",
-		Args: []string{"image", "list"},
-	}}
+func TestCustomCommandsFlattensFlatAndPerContextCommands(t *testing.T) {
+	cfg := appconfig.Config{
+		Commands: []appconfig.Command{{
+			Name: "Images",
+			Args: []string{"image", "list"},
+		}},
+		CustomCommands: map[string][]appconfig.Command{
+			"containers": {{
+				Name:   "Shell",
+				Args:   []string{"exec", "-it", "{container}", "sh"},
+				Attach: true,
+			}},
+		},
+	}
 
-	got := customCommands(commands)
-	want := []tui.CustomCommand{{
-		Name: "Images",
-		Args: []string{"image", "list"},
-	}}
+	got := customCommands(cfg)
+	want := []tui.CustomCommand{
+		{Name: "Images", Args: []string{"image", "list"}},
+		{Name: "Shell", Args: []string{"exec", "-it", "{container}", "sh"}, Attach: true},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("customCommands mismatch\nwant: %#v\n got: %#v", want, got)
 	}
 
-	commands[0].Args[0] = "mutated"
+	cfg.Commands[0].Args[0] = "mutated"
 	if got[0].Args[0] != "image" {
 		t.Fatalf("customCommands did not copy args: %#v", got)
+	}
+}
+
+func TestApplyConfigToOptionsMapsGUIAndLogs(t *testing.T) {
+	cfg := appconfig.Config{
+		GUI: appconfig.GUI{
+			SidePanelWidth: 0.4,
+			ScreenMode:     "half",
+			Border:         "double",
+			Theme:          appconfig.Theme{ActiveBorderColor: "201", SelectedLineBgColor: "57"},
+		},
+		Logs:              appconfig.Logs{Tail: 500, Since: "10m"},
+		RefreshIntervalMs: 2000,
+	}
+	var opts tui.Options
+	applyConfigToOptions(&opts, cfg)
+	if opts.ScreenMode != "half" || opts.SidePanelWidth != 0.4 || opts.BorderStyle != "double" {
+		t.Fatalf("gui mapping mismatch: %#v", opts)
+	}
+	if opts.ActiveColor != "201" || opts.SelectedBgColor != "57" {
+		t.Fatalf("theme mapping mismatch: %#v", opts)
+	}
+	if opts.LogsTail != 500 || opts.LogsSince != "10m" {
+		t.Fatalf("logs mapping mismatch: %#v", opts)
+	}
+	if opts.RefreshInterval != 2*time.Second {
+		t.Fatalf("refresh mapping mismatch: %v", opts.RefreshInterval)
 	}
 }
 

@@ -42,7 +42,9 @@ type Client interface {
 	InspectMachine(context.Context, string) (string, error)
 	ShellCommand(string, string) (*exec.Cmd, error)
 	Exec(context.Context, string, string) (string, error)
+	Top(context.Context, string) (string, error)
 	Command(context.Context, []string) (string, error)
+	CommandProcess([]string) (*exec.Cmd, error)
 	MachineShellCommand(string) (*exec.Cmd, error)
 	CreateMachine(context.Context, string, string) error
 	SetDefaultMachine(context.Context, string) error
@@ -96,12 +98,54 @@ const (
 	resourceCount
 )
 
-type panelMode int
+type mainTab int
 
 const (
-	panelDetails panelMode = iota
-	panelInspect
-	panelLogs
+	tabConfig mainTab = iota
+	tabLogs
+	tabStats
+	tabEnv
+	tabTop
+	tabInspect
+)
+
+// fetched reports whether a tab's content is loaded asynchronously by a
+// one-shot command (as opposed to rendered from snapshot data or streamed). The
+// Logs tab is handled separately via a live follow stream.
+func (t mainTab) fetched() bool {
+	return t == tabTop || t == tabInspect
+}
+
+// screenMode controls how much width the main panel occupies relative to the
+// sidebar, cycled with + / _.
+type screenMode int
+
+const (
+	screenNormal screenMode = iota
+	screenHalf
+	screenFull
+	screenModeCount
+)
+
+func (s screenMode) label() string {
+	switch s {
+	case screenHalf:
+		return "half"
+	case screenFull:
+		return "fullscreen"
+	default:
+		return "normal"
+	}
+}
+
+// bufferKind tracks what the panel's text buffer (panelTitle/panelBody)
+// currently holds.
+type bufferKind int
+
+const (
+	bufNone   bufferKind = iota // panel renders the active tab from snapshot data
+	bufTab                      // panel renders a fetched tab's buffered content
+	bufOutput                   // panel renders transient command output
 )
 
 type confirmAction int
@@ -156,12 +200,28 @@ type Options struct {
 	ConfigPath         string
 	OpenConfigCommand  func(string) (*exec.Cmd, error)
 	LoadConfigCommands func() ([]CustomCommand, error)
-	StartupWarning     string
+	// ReloadConfig, if set, returns a fresh Options after the config file is
+	// edited so commands, theme, and gui/log settings can be reapplied without
+	// a restart. It takes precedence over LoadConfigCommands.
+	ReloadConfig    func() (Options, error)
+	OpenLinkCommand func(string) (*exec.Cmd, error)
+	StartupWarning  string
+
+	// Appearance and behaviour (from config gui/logs/refreshIntervalMs).
+	ScreenMode      string
+	SidePanelWidth  float64
+	BorderStyle     string
+	ActiveColor     string
+	SelectedBgColor string
+	LogsTail        int
+	LogsSince       string
+	RefreshInterval time.Duration
 }
 
 type CustomCommand struct {
-	Name string
-	Args []string
+	Name   string
+	Args   []string
+	Attach bool
 }
 
 type Model struct {
@@ -191,11 +251,21 @@ type Model struct {
 	statHistory    map[string][]statHistorySample
 	system         containercli.SystemStatus
 
-	panelMode    panelMode
+	tabIndex     [resourceCount]int
+	bufferKind   bufferKind
+	bufferTab    mainTab
+	bufferKey    string
 	panelTitle   string
 	panelBody    string
 	panelOffset  int
+	stream       *logStream
+	streamGen    int
+	logLines     []string
+	logKey       string
+	logFollow    bool
+	menu         *actionMenu
 	showHelp     bool
+	helpOffset   int
 	filter       string
 	filterInput  string
 	filtering    bool
@@ -215,6 +285,12 @@ type Model struct {
 	configPath      string
 	openConfig      func(string) (*exec.Cmd, error)
 	loadConfig      func() ([]CustomCommand, error)
+	reloadConfig    func() (Options, error)
+	openLink        func(string) (*exec.Cmd, error)
+	logsTail        int
+	logsSince       string
+	screenMode      screenMode
+	sidePanelWidth  float64
 }
 
 type snapshotMsg struct {
@@ -263,7 +339,7 @@ type configEditedMsg struct {
 type autoRefreshMsg time.Time
 
 const defaultRefreshInterval = 5 * time.Second
-const maxStatHistorySamples = 24
+const maxStatHistorySamples = 120
 
 type statHistorySample struct {
 	cpuPercent   float64
@@ -288,17 +364,51 @@ func NewWithOptions(client Client, opts Options) Model {
 	if strings.TrimSpace(opts.StartupWarning) != "" {
 		statusLine = strings.TrimSpace(opts.StartupWarning)
 	}
+	applyTheme(opts.BorderStyle, opts.ActiveColor, opts.SelectedBgColor)
+	refresh := defaultRefreshInterval
+	if opts.RefreshInterval > 0 {
+		refresh = opts.RefreshInterval
+	}
 	return Model{
 		client:          client,
-		panelMode:       panelDetails,
-		panelTitle:      "Details",
 		statusLine:      statusLine,
 		autoRefresh:     true,
-		refreshInterval: defaultRefreshInterval,
+		refreshInterval: refresh,
 		customCommands:  commands,
 		configPath:      opts.ConfigPath,
 		openConfig:      opts.OpenConfigCommand,
 		loadConfig:      opts.LoadConfigCommands,
+		reloadConfig:    opts.ReloadConfig,
+		openLink:        opts.OpenLinkCommand,
+		logsTail:        opts.LogsTail,
+		logsSince:       opts.LogsSince,
+		screenMode:      parseScreenMode(opts.ScreenMode),
+		sidePanelWidth:  opts.SidePanelWidth,
+	}
+}
+
+// applyReloadedOptions reapplies commands, theme, and gui/log settings after
+// the config file is edited in-session.
+func (m *Model) applyReloadedOptions(opts Options) {
+	m.customCommands = append([]CustomCommand(nil), opts.CustomCommands...)
+	applyTheme(opts.BorderStyle, opts.ActiveColor, opts.SelectedBgColor)
+	m.screenMode = parseScreenMode(opts.ScreenMode)
+	m.sidePanelWidth = opts.SidePanelWidth
+	m.logsTail = opts.LogsTail
+	m.logsSince = opts.LogsSince
+	if opts.RefreshInterval > 0 {
+		m.refreshInterval = opts.RefreshInterval
+	}
+}
+
+func parseScreenMode(value string) screenMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "half":
+		return screenHalf
+	case "full", "fullscreen":
+		return screenFull
+	default:
+		return screenNormal
 	}
 }
 
@@ -343,6 +453,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusLine = msg.err.Error()
 			return m, nil
 		}
+		m.bufferKind = bufOutput
 		m.panelTitle = msg.title
 		m.panelBody = msg.body
 		m.panelOffset = 0
@@ -352,19 +463,25 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshCmd()
 		}
 		return m, nil
+	case tabFetchedMsg:
+		return m.handleTabFetched(msg)
+	case logStreamMsg:
+		return m.handleLogStream(msg)
 	case actionDoneMsg:
-		m.busy = "refreshing"
 		m.confirm = nil
-		m.panelMode = panelDetails
-		m.panelOffset = 0
 		m.err = msg.err
 		if msg.err != nil {
+			// Keep any cached tab content visible and recover the active fetched
+			// tab / log stream rather than stranding it on "Loading…".
 			m.busy = ""
 			m.statusLine = msg.err.Error()
-			return m, nil
+			return m, m.ensureMainPanelCmd()
 		}
+		m.busy = "refreshing"
+		m.bufferKind = bufNone
+		m.panelOffset = 0
 		m.statusLine = msg.message
-		return m, m.refreshCmd()
+		return m, m.refreshWithActiveTab(nil)
 	case shellFinishedMsg:
 		m.busy = ""
 		m.err = msg.err
@@ -390,7 +507,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusLine = msg.err.Error()
 			return m, nil
 		}
-		if m.loadConfig != nil {
+		if m.reloadConfig != nil {
+			opts, err := m.reloadConfig()
+			if err != nil {
+				m.err = err
+				m.statusLine = "config reload failed: " + err.Error()
+				return m, nil
+			}
+			m.applyReloadedOptions(opts)
+		} else if m.loadConfig != nil {
 			commands, err := m.loadConfig()
 			if err != nil {
 				m.err = err
@@ -431,15 +556,21 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseButtonWheelUp:
 		if m.mouseInPanel(msg) {
 			m.scrollPanel(-3)
+			return m, nil
 		} else if m.mouseInSidebar(msg) {
 			m.moveSelection(-1)
+			cmd := m.ensureMainPanelCmd()
+			return m, cmd
 		}
 		return m, nil
 	case tea.MouseButtonWheelDown:
 		if m.mouseInPanel(msg) {
 			m.scrollPanel(3)
+			return m, nil
 		} else if m.mouseInSidebar(msg) {
 			m.moveSelection(1)
+			cmd := m.ensureMainPanelCmd()
+			return m, cmd
 		}
 		return m, nil
 	case tea.MouseButtonLeft:
@@ -452,6 +583,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.clampCursors()
 				m.resetPanel()
 				m.statusLine = "selected " + resourceLabel(kind)
+				cmd := m.ensureMainPanelCmd()
+				return m, cmd
 			}
 			return m, nil
 		}
@@ -459,6 +592,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if m.setActiveVisibleIndex(index) {
 				m.resetPanel()
 				m.statusLine = "selected " + resourceLabel(m.active)
+				cmd := m.ensureMainPanelCmd()
+				return m, cmd
 			}
 			return m, nil
 		}
@@ -482,7 +617,7 @@ func (m Model) mouseInPanel(msg tea.MouseMsg) bool {
 
 func (m Model) tabAt(x int, y int) (resourceKind, bool) {
 	layout, ok := m.viewLayout()
-	if !ok || x < layout.sidebarContentX || y < layout.sidebarContentY || y > layout.sidebarContentY+2 {
+	if !ok || layout.sidebarWidth <= 0 || x >= layout.sidebarWidth || x < layout.sidebarContentX || y < layout.sidebarContentY || y > layout.sidebarContentY+2 {
 		return resourceContainers, false
 	}
 
@@ -616,6 +751,12 @@ func (m *Model) setActiveVisibleIndex(index int) bool {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	if m.menu != nil {
+		return m.handleMenuKey(msg)
+	}
+	if m.showHelp {
+		return m.handleHelpKey(msg)
+	}
 	if m.confirm != nil {
 		return m.handleConfirmKey(key)
 	}
@@ -628,16 +769,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "ctrl+c", "q":
+		m.stopStream()
 		return m, tea.Quit
 	case "/":
 		return m.startFiltering(), nil
 	case "esc":
+		if m.bufferKind == bufOutput {
+			m.bufferKind = bufNone
+			m.panelOffset = 0
+			m.statusLine = "closed output"
+			cmd := m.ensureMainPanelCmd()
+			return m, cmd
+		}
 		if m.filter != "" {
 			m.filter = ""
 			m.filterInput = ""
 			m.clampCursors()
 			m.resetPanel()
 			m.statusLine = "filter cleared"
+			cmd := m.ensureMainPanelCmd()
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -647,8 +798,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "?":
-		m.showHelp = !m.showHelp
+		m.showHelp = true
+		m.helpOffset = 0
 		return m, nil
+	case " ", "space":
+		return m.openActionMenu()
 	case ":":
 		return m.startContainerCommandPrompt(), nil
 	case ";":
@@ -656,11 +810,31 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.active = (m.active + 1) % resourceCount
 		m.resetPanel()
+		cmd := m.ensureMainPanelCmd()
+		return m, cmd
+	case "shift+tab":
+		m.active = (m.active - 1 + resourceCount) % resourceCount
+		m.resetPanel()
+		cmd := m.ensureMainPanelCmd()
+		return m, cmd
+	case "[":
+		cmd := m.cycleTab(-1)
+		return m, cmd
+	case "]":
+		cmd := m.cycleTab(1)
+		return m, cmd
+	case "+", "=":
+		m.screenMode = (m.screenMode + 1) % screenModeCount
+		m.statusLine = "screen: " + m.screenMode.label()
+		return m, nil
+	case "_", "-":
+		m.screenMode = (m.screenMode - 1 + screenModeCount) % screenModeCount
+		m.statusLine = "screen: " + m.screenMode.label()
 		return m, nil
 	case "r":
 		m.busy = "refreshing"
 		m.statusLine = "refreshing"
-		return m, m.refreshWithActivePanelCmd(nil)
+		return m, m.refreshWithActiveTab(nil)
 	case "ctrl+r":
 		return m.restartSelected()
 	case "u":
@@ -675,15 +849,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openConfigSelected()
 	case "up", "k":
 		m.moveSelection(-1)
-		return m, nil
+		cmd := m.ensureMainPanelCmd()
+		return m, cmd
 	case "down", "j":
 		m.moveSelection(1)
-		return m, nil
+		cmd := m.ensureMainPanelCmd()
+		return m, cmd
 	case "home":
 		m.panelOffset = 0
+		m.logFollow = false
 		return m, nil
 	case "end":
 		m.panelOffset = m.maxPanelOffset()
+		m.logFollow = true
 		return m, nil
 	case "pgup":
 		m.scrollPanel(-m.panelPageSize())
@@ -729,6 +907,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.followLogsSelected()
 	case "e":
 		return m.shellSelected()
+	case "w":
+		return m.openInBrowser()
 	case "X":
 		return m.startExecPrompt()
 	case "s":
@@ -1079,7 +1259,6 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "pulling " + reference
 		m.statusLine = "pulling " + reference
-		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.PullImage(context.Background(), reference)
 			return outputMsg{title: "Pull " + reference, body: commandOutputBody(body), err: err, refresh: true}
@@ -1135,7 +1314,6 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "building " + tag
 		m.statusLine = "building " + tag
-		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.BuildImage(context.Background(), tag, contextDir)
 			return outputMsg{title: "Build " + tag, body: commandOutputBody(body), err: err, refresh: true}
@@ -1200,7 +1378,6 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "running command in " + container
 		m.statusLine = "running command in " + container
-		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.Exec(context.Background(), container, command)
 			if strings.TrimSpace(body) == "" && err == nil {
@@ -1221,7 +1398,6 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		title := "container " + strings.Join(args, " ")
 		m.busy = "running " + title
 		m.statusLine = "running " + title
-		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.Command(context.Background(), args)
 			if strings.TrimSpace(body) == "" && err == nil {
@@ -1247,7 +1423,18 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "running " + title
 		m.statusLine = "running " + title
-		m.panelMode = panelInspect
+		if command.Attach {
+			cmd, err := m.client.CommandProcess(args)
+			if err != nil {
+				m.busy = ""
+				m.err = err
+				m.statusLine = err.Error()
+				return m, nil
+			}
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return actionDoneMsg{message: "ran " + title, err: err}
+			})
+		}
 		return m, func() tea.Msg {
 			body, err := m.client.Command(context.Background(), args)
 			return outputMsg{title: title, body: commandOutputBody(body), err: err}
@@ -1264,7 +1451,6 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "saving image " + reference
 		m.statusLine = "saving image " + reference
-		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.SaveImage(context.Background(), reference, outputPath)
 			return outputMsg{title: "Save " + reference, body: commandOutputBody(body), err: err, refresh: true}
@@ -1280,7 +1466,6 @@ func (m Model) applyPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.busy = "loading image archive"
 		m.statusLine = "loading image archive"
-		m.panelMode = panelInspect
 		return m, func() tea.Msg {
 			body, err := m.client.LoadImage(context.Background(), inputPath)
 			return outputMsg{title: "Load " + inputPath, body: commandOutputBody(body), err: err, refresh: true}
@@ -1852,12 +2037,10 @@ func (m Model) autoRefreshCmd() tea.Cmd {
 	})
 }
 
-func (m Model) refreshWithActivePanelCmd(nextTick tea.Cmd) tea.Cmd {
+func (m Model) refreshWithActiveTab(nextTick tea.Cmd) tea.Cmd {
 	cmds := []tea.Cmd{m.refreshCmd()}
-	if m.panelMode == panelLogs {
-		if _, cmd := m.logsCommandForSelection(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+	if cmd := m.forceFetchActiveTabCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	if nextTick != nil {
 		cmds = append(cmds, nextTick)
@@ -1875,158 +2058,25 @@ func (m Model) handleAutoRefresh() (tea.Model, tea.Cmd) {
 	}
 	m.busy = "refreshing"
 	m.statusLine = "auto refreshing"
-	return m, m.refreshWithActivePanelCmd(nextTick)
+	return m, m.refreshWithActiveTab(nextTick)
 }
 
+// inspectSelected jumps the main panel to the Inspect tab (falling back to the
+// Config tab for resources without a dedicated inspect command).
 func (m Model) inspectSelected() (tea.Model, tea.Cmd) {
-	switch m.active {
-	case resourceContainers:
-		container, ok := m.selectedContainer()
-		if !ok {
-			return m, nil
-		}
-		id := container.Name()
-		m.busy = "inspecting"
-		m.panelMode = panelInspect
-		return m, func() tea.Msg {
-			body, err := m.client.InspectContainer(context.Background(), id)
-			return outputMsg{title: "Inspect " + id, body: body, err: err}
-		}
-	case resourceImages:
-		image, ok := m.selectedImage()
-		if !ok {
-			return m, nil
-		}
-		name := image.Name()
-		m.busy = "inspecting"
-		m.panelMode = panelInspect
-		return m, func() tea.Msg {
-			body, err := m.client.InspectImage(context.Background(), name)
-			return outputMsg{title: "Inspect " + name, body: body, err: err}
-		}
-	case resourceBuilder:
-		if !m.builderMatchesFilter() {
-			return m, nil
-		}
-		m.panelMode = panelInspect
-		m.panelTitle = "Builder"
-		m.panelBody = strings.Join(m.builder.DetailLines(), "\n")
-		m.panelOffset = 0
-		m.statusLine = "loaded builder"
-		return m, nil
-	case resourceVolumes:
-		volume, ok := m.selectedVolume()
-		if !ok {
-			return m, nil
-		}
-		name := volume.Name()
-		m.busy = "inspecting"
-		m.panelMode = panelInspect
-		return m, func() tea.Msg {
-			body, err := m.client.InspectVolume(context.Background(), name)
-			return outputMsg{title: "Inspect " + name, body: body, err: err}
-		}
-	case resourceNetworks:
-		network, ok := m.selectedNetwork()
-		if !ok {
-			return m, nil
-		}
-		name := network.Name()
-		m.busy = "inspecting"
-		m.panelMode = panelInspect
-		return m, func() tea.Msg {
-			body, err := m.client.InspectNetwork(context.Background(), name)
-			return outputMsg{title: "Inspect " + name, body: body, err: err}
-		}
-	case resourceMachines:
-		machine, ok := m.selectedMachine()
-		if !ok {
-			return m, nil
-		}
-		id := machine.Name()
-		m.busy = "inspecting"
-		m.panelMode = panelInspect
-		return m, func() tea.Msg {
-			body, err := m.client.InspectMachine(context.Background(), id)
-			return outputMsg{title: "Inspect " + id, body: body, err: err}
-		}
-	case resourceRegistries:
-		registry, ok := m.selectedRegistry()
-		if !ok {
-			return m, nil
-		}
-		name := registry.Name()
-		m.panelMode = panelInspect
-		m.panelTitle = "Registry " + name
-		m.panelBody = strings.Join(registry.DetailLines(), "\n")
-		m.panelOffset = 0
-		m.statusLine = "loaded registry " + name
-		return m, nil
-	case resourceSystem:
-		if !m.systemMatchesFilter() {
-			return m, nil
-		}
-		m.panelMode = panelInspect
-		m.panelTitle = "System"
-		m.panelBody = strings.Join(m.system.DetailLines(m.systemUsage, m.systemVersions), "\n")
-		m.panelOffset = 0
-		m.statusLine = "loaded system"
-		return m, nil
-	}
-	return m, nil
-}
-
-func (m Model) logsSelected() (tea.Model, tea.Cmd) {
-	busy, cmd := m.logsCommandForSelection()
-	if cmd == nil {
-		return m, nil
-	}
-	m.busy = busy
-	m.panelMode = panelLogs
+	cmd := m.activateTab(tabInspect)
 	return m, cmd
 }
 
-func (m Model) logsCommandForSelection() (string, tea.Cmd) {
-	switch m.active {
-	case resourceContainers:
-		container, ok := m.selectedContainer()
-		if !ok {
-			return "", nil
-		}
-		id := container.Name()
-		return "loading logs", func() tea.Msg {
-			body, err := m.client.Logs(context.Background(), id, 200)
-			if strings.TrimSpace(body) == "" && err == nil {
-				body = "No logs returned."
-			}
-			return outputMsg{title: "Logs " + id, body: body, err: err}
-		}
-	case resourceMachines:
-		machine, ok := m.selectedMachine()
-		if !ok {
-			return "", nil
-		}
-		id := machine.Name()
-		return "loading logs", func() tea.Msg {
-			body, err := m.client.MachineLogs(context.Background(), id, 200)
-			if strings.TrimSpace(body) == "" && err == nil {
-				body = "No machine logs returned."
-			}
-			return outputMsg{title: "Machine logs " + id, body: body, err: err}
-		}
-	case resourceSystem:
-		if !m.systemMatchesFilter() {
-			return "", nil
-		}
-		return "loading system logs", func() tea.Msg {
-			body, err := m.client.SystemLogs(context.Background(), "5m")
-			if strings.TrimSpace(body) == "" && err == nil {
-				body = "No system logs returned."
-			}
-			return outputMsg{title: "System logs", body: body, err: err}
-		}
+// logsSelected jumps the main panel to the Logs tab when the resource supports
+// it.
+func (m Model) logsSelected() (tea.Model, tea.Cmd) {
+	if !hasTab(m.active, tabLogs) {
+		m.statusLine = "no logs for " + resourceLabel(m.active)
+		return m, nil
 	}
-	return "", nil
+	cmd := m.activateTab(tabLogs)
+	return m, cmd
 }
 
 func (m Model) followLogsSelected() (tea.Model, tea.Cmd) {
@@ -2102,6 +2152,36 @@ func (m Model) shellSelected() (tea.Model, tea.Cmd) {
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return shellFinishedMsg{id: id, err: err}
 	})
+}
+
+// openInBrowser opens the selected container's first published port in the
+// system browser (fire-and-forget, without suspending the TUI).
+func (m Model) openInBrowser() (tea.Model, tea.Cmd) {
+	if m.active != resourceContainers {
+		return m, nil
+	}
+	if m.openLink == nil {
+		m.statusLine = "open-in-browser unavailable"
+		return m, nil
+	}
+	container, ok := m.selectedContainer()
+	if !ok {
+		return m, nil
+	}
+	url, ok := container.FirstPublishedURL()
+	if !ok {
+		m.statusLine = "no published ports for " + container.Name()
+		return m, nil
+	}
+	openLink := m.openLink
+	m.statusLine = "opening " + url
+	return m, func() tea.Msg {
+		cmd, err := openLink(url)
+		if err == nil && cmd != nil {
+			err = cmd.Start()
+		}
+		return actionDoneMsg{message: "opened " + url, err: err}
+	}
 }
 
 func (m Model) machineShellSelected() (tea.Model, tea.Cmd) {
@@ -2182,7 +2262,6 @@ func (m Model) pushSelectedImage() (tea.Model, tea.Cmd) {
 	}
 	m.busy = "pushing " + reference
 	m.statusLine = "pushing " + reference
-	m.panelMode = panelInspect
 	return m, func() tea.Msg {
 		body, err := m.client.PushImage(context.Background(), reference)
 		return outputMsg{title: "Push " + reference, body: commandOutputBody(body), err: err, refresh: true}
@@ -2402,15 +2481,19 @@ func (m *Model) clampCursors() {
 }
 
 func (m *Model) resetPanel() {
-	m.panelMode = panelDetails
-	m.panelTitle = "Details"
+	m.bufferKind = bufNone
+	m.panelTitle = ""
 	m.panelBody = ""
 	m.panelOffset = 0
+	m.clampActiveTab()
 }
 
 func (m *Model) scrollPanel(delta int) {
 	m.panelOffset += delta
 	m.clampPanelOffset()
+	// On the Logs tab, manual scrolling away from the bottom detaches autoscroll;
+	// scrolling back to the bottom re-enables it.
+	m.logFollow = m.panelOffset >= m.maxPanelOffset()
 }
 
 func (m Model) selectedContainer() (containercli.Container, bool) {
@@ -2494,6 +2577,12 @@ func (m Model) View() string {
 	if m.height < 8 || m.width < 60 {
 		return "lazycont needs a terminal of at least 60x8"
 	}
+	if m.showHelp {
+		return m.renderHelpOverlay()
+	}
+	if m.menu != nil {
+		return m.renderMenuOverlay()
+	}
 
 	top := m.renderTopBar()
 	footer := m.renderFooter()
@@ -2502,12 +2591,17 @@ func (m Model) View() string {
 		bodyHeight = 1
 	}
 
-	sidebarWidth := sidebarWidthFor(m.width)
+	sidebarWidth := m.sidebarWidth()
 	panelWidth := m.width - sidebarWidth
 
-	sidebar := m.renderSidebar(sidebarWidth, bodyHeight)
 	panel := m.renderPanel(panelWidth, bodyHeight)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, panel)
+	var body string
+	if sidebarWidth <= 0 {
+		body = panel
+	} else {
+		sidebar := m.renderSidebar(sidebarWidth, bodyHeight)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, panel)
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, footer)
 }
@@ -2527,8 +2621,8 @@ func (m Model) viewLayout() (viewLayout, bool) {
 	return viewLayout{
 		bodyTop:         1,
 		bodyHeight:      bodyHeight,
-		sidebarWidth:    sidebarWidthFor(m.width),
-		panelX:          sidebarWidthFor(m.width),
+		sidebarWidth:    m.sidebarWidth(),
+		panelX:          m.sidebarWidth(),
 		sidebarContentX: 2,
 		sidebarContentY: 2,
 		listFirstRowY:   7,
@@ -2537,17 +2631,83 @@ func (m Model) viewLayout() (viewLayout, bool) {
 }
 
 func sidebarWidthFor(width int) int {
+	// Prefer a sidebar in the [44, 72] band, but never starve the main panel:
+	// it must keep at least 28 columns. On narrow terminals the panel minimum
+	// wins, so the sidebar may shrink below 44 (down to a 1-column floor).
 	sidebarWidth := width / 2
-	if sidebarWidth < 44 {
-		sidebarWidth = 44
-	}
 	if sidebarWidth > 72 {
 		sidebarWidth = 72
+	}
+	if sidebarWidth < 44 {
+		sidebarWidth = 44
 	}
 	if sidebarWidth > width-28 {
 		sidebarWidth = width - 28
 	}
+	if sidebarWidth < 1 {
+		sidebarWidth = 1
+	}
 	return sidebarWidth
+}
+
+// sidebarWidth is the current sidebar width for the active screen mode.
+// Fullscreen hides the sidebar; half mode narrows it to widen the main panel.
+func (m Model) sidebarWidth() int {
+	switch m.screenMode {
+	case screenFull:
+		return 0
+	case screenHalf:
+		return clampSidebar(m.width/4, m.width, 24)
+	default:
+		if m.sidePanelWidth > 0 && m.sidePanelWidth < 1 {
+			return clampSidebar(int(float64(m.width)*m.sidePanelWidth), m.width, 30)
+		}
+		return sidebarWidthFor(m.width)
+	}
+}
+
+func clampSidebar(w int, total int, min int) int {
+	if w < min {
+		w = min
+	}
+	if w > total-28 {
+		w = total - 28
+	}
+	if w < 0 {
+		w = 0
+	}
+	return w
+}
+
+// applyTheme overrides panel borders and accent colours from config. It mutates
+// package-level styles and is invoked once at startup.
+func applyTheme(border string, activeColor string, selectedBg string) {
+	if b, ok := borderForName(border); ok {
+		panelStyle = panelStyle.Border(b)
+		activePanelStyle = panelStyle.BorderForeground(colorActive)
+	}
+	if strings.TrimSpace(activeColor) != "" {
+		colorActive = lipgloss.Color(activeColor)
+		activePanelStyle = activePanelStyle.BorderForeground(colorActive)
+		tabActiveStyle = tabActiveStyle.Foreground(colorActive)
+	}
+	if strings.TrimSpace(selectedBg) != "" {
+		selectedStyle = selectedStyle.Background(lipgloss.Color(selectedBg))
+	}
+}
+
+func borderForName(name string) (lipgloss.Border, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "rounded":
+		return lipgloss.RoundedBorder(), true
+	case "single", "normal":
+		return lipgloss.NormalBorder(), true
+	case "double":
+		return lipgloss.DoubleBorder(), true
+	case "hidden", "none":
+		return lipgloss.HiddenBorder(), true
+	}
+	return lipgloss.Border{}, false
 }
 
 var (
@@ -2578,10 +2738,11 @@ var (
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("57")).
 			Bold(true)
-	mutedStyle   = lipgloss.NewStyle().Foreground(colorMuted)
-	errorStyle   = lipgloss.NewStyle().Foreground(colorRed)
-	runningStyle = lipgloss.NewStyle().Foreground(colorGreen)
-	stoppedStyle = lipgloss.NewStyle().Foreground(colorYellow)
+	mutedStyle     = lipgloss.NewStyle().Foreground(colorMuted)
+	errorStyle     = lipgloss.NewStyle().Foreground(colorRed)
+	runningStyle   = lipgloss.NewStyle().Foreground(colorGreen)
+	stoppedStyle   = lipgloss.NewStyle().Foreground(colorYellow)
+	tabActiveStyle = lipgloss.NewStyle().Foreground(colorActive).Bold(true).Underline(true)
 )
 
 func (m Model) renderTopBar() string {
@@ -2616,13 +2777,9 @@ func (m Model) renderFooter() string {
 		line := "/ " + value + "  enter apply, esc cancel, ctrl+u clear"
 		return footerStyle.Width(m.width).Foreground(colorActive).Render(truncate(line, m.width-2))
 	}
-	if m.showHelp {
-		help := "tab switch | / filter | : container command | ; custom command | o open config | r refresh | u auto-refresh | a pull image | b build image | t tag image | P push image | O save image | L load image | R run image | N create container | g registry login | C create volume/network | M create machine | m machine settings | S default machine | i inspect | c copy files | E export container | l logs | f follow logs | e shell | X exec command | s start | ctrl+r restart | x stop | K kill | d delete/logout | p prune | q quit"
-		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
-	}
 	status := m.statusLine
 	if status == "" {
-		status = "? help"
+		status = "space actions · ? help"
 	}
 	if activeFilter(m.filter) != "" {
 		status = status + " | filter: " + m.filter
@@ -2630,7 +2787,7 @@ func (m Model) renderFooter() string {
 	if m.err != nil {
 		return footerStyle.Width(m.width).Foreground(colorRed).Render(truncate(status, m.width-2))
 	}
-	return footerStyle.Width(m.width).Render(truncate(status+" | "+m.autoRefreshLabel()+" | f follow | ? help", m.width-2))
+	return footerStyle.Width(m.width).Render(truncate(status+" | "+m.autoRefreshLabel()+" | space menu | ? help", m.width-2))
 }
 
 func (m Model) autoRefreshLabel() string {
@@ -3132,72 +3289,49 @@ func (m Model) renderPanel(width int, height int) string {
 	contentWidth := width - 4
 	textHeight := panelTextHeight(height)
 
-	lines := []string{title, ""}
+	header := m.renderPanelHeader(title, contentWidth)
+	lines := []string{header, ""}
 	renderedBody := renderTextWindow(body, contentWidth, textHeight, &m.panelOffset)
 	lines = append(lines, renderedBody...)
 	return style.Render(strings.Join(lines, "\n"))
 }
 
+// renderPanelHeader renders the main-panel tab strip, or the output title when
+// transient command output is displayed.
+func (m Model) renderPanelHeader(title string, width int) string {
+	if m.bufferKind == bufOutput {
+		return truncate(title, width)
+	}
+	tabs := m.activeTabs()
+	active := m.activeMainTab()
+	segments := make([]string, 0, len(tabs)+1)
+	used := 0
+	for i, t := range tabs {
+		label := t.label()
+		extra := len(label)
+		if i > 0 {
+			extra++
+		}
+		if i > 0 && used+extra > width {
+			segments = append(segments, "…")
+			break
+		}
+		used += extra
+		if t == active {
+			segments = append(segments, tabActiveStyle.Render(label))
+		} else {
+			segments = append(segments, mutedStyle.Render(label))
+		}
+	}
+	return strings.Join(segments, " ")
+}
+
 func (m Model) panelContent() (string, string) {
-	if m.panelMode != panelDetails {
+	if m.bufferKind == bufOutput {
 		return m.panelTitle, m.panelBody
 	}
 	now := effectiveNow(m.lastUpdated)
-	switch m.active {
-	case resourceContainers:
-		container, ok := m.selectedContainer()
-		if !ok {
-			return "Details", "No container selected."
-		}
-		lines := container.DetailLines(now)
-		if statLines := m.statLines(container.Name()); len(statLines) > 0 {
-			lines = append(lines, "", "Stats")
-			lines = append(lines, statLines...)
-		}
-		return "Details " + container.Name(), strings.Join(lines, "\n")
-	case resourceImages:
-		image, ok := m.selectedImage()
-		if !ok {
-			return "Details", "No image selected."
-		}
-		return "Details " + image.Name(), strings.Join(image.DetailLines(now), "\n")
-	case resourceBuilder:
-		if !m.builderMatchesFilter() {
-			return "Details", "No builder selected."
-		}
-		return "Details builder", strings.Join(m.builder.DetailLines(), "\n")
-	case resourceVolumes:
-		volume, ok := m.selectedVolume()
-		if !ok {
-			return "Details", "No volume selected."
-		}
-		return "Details " + volume.Name(), strings.Join(volume.DetailLines(now), "\n")
-	case resourceNetworks:
-		network, ok := m.selectedNetwork()
-		if !ok {
-			return "Details", "No network selected."
-		}
-		return "Details " + network.Name(), strings.Join(network.DetailLines(now), "\n")
-	case resourceMachines:
-		machine, ok := m.selectedMachine()
-		if !ok {
-			return "Details", "No machine selected."
-		}
-		return "Details " + machine.Name(), strings.Join(machine.DetailLines(now), "\n")
-	case resourceRegistries:
-		registry, ok := m.selectedRegistry()
-		if !ok {
-			return "Details", "No registry selected."
-		}
-		return "Details " + registry.Name(), strings.Join(registry.DetailLines(), "\n")
-	case resourceSystem:
-		if !m.systemMatchesFilter() {
-			return "Details", "No system selected."
-		}
-		return "Details system", strings.Join(m.system.DetailLines(m.systemUsage, m.systemVersions), "\n")
-	default:
-		return "Details", ""
-	}
+	return m.tabContent(now)
 }
 
 func (m Model) statLines(containerID string) []string {

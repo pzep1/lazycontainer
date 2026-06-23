@@ -11,18 +11,50 @@ import (
 )
 
 type Config struct {
-	Commands []Command `json:"commands"`
+	Commands          []Command            `json:"commands"`
+	CustomCommands    map[string][]Command `json:"customCommands"`
+	GUI               GUI                  `json:"gui"`
+	Logs              Logs                 `json:"logs"`
+	RefreshIntervalMs int                  `json:"refreshIntervalMs"`
 }
 
 type Command struct {
-	Name string   `json:"name"`
-	Args []string `json:"args"`
+	Name   string   `json:"name"`
+	Args   []string `json:"args"`
+	Attach bool     `json:"attach"`
+}
+
+// GUI holds appearance and layout preferences.
+type GUI struct {
+	SidePanelWidth float64 `json:"sidePanelWidth"`
+	ScreenMode     string  `json:"screenMode"`
+	Border         string  `json:"border"`
+	Theme          Theme   `json:"theme"`
+}
+
+// Theme holds colour overrides (256-colour codes or names understood by the
+// terminal profile).
+type Theme struct {
+	ActiveBorderColor   string `json:"activeBorderColor"`
+	SelectedLineBgColor string `json:"selectedLineBgColor"`
+}
+
+// Logs controls log retrieval defaults.
+type Logs struct {
+	Tail  int    `json:"tail"`
+	Since string `json:"since"`
 }
 
 const Starter = `{
   "commands": []
 }
 `
+
+// ContainerContexts enumerates the customCommands contexts that map to
+// lazycont resource panes.
+var ContainerContexts = []string{
+	"containers", "images", "volumes", "networks", "machines", "registries", "builder", "system",
+}
 
 func DefaultPath() (string, error) {
 	dir, err := os.UserConfigDir()
@@ -83,17 +115,31 @@ func Load(path string) (Config, error) {
 
 func (c *Config) normalize() error {
 	for idx := range c.Commands {
-		command := &c.Commands[idx]
-		command.Name = strings.TrimSpace(command.Name)
-		if command.Name == "" {
-			return fmt.Errorf("commands[%d].name is required", idx)
+		if err := normalizeCommand(&c.Commands[idx], fmt.Sprintf("commands[%d]", idx)); err != nil {
+			return err
 		}
-		if len(command.Args) == 0 || strings.TrimSpace(command.Args[0]) == "" {
-			return fmt.Errorf("commands[%d].args must start with a container subcommand", idx)
+	}
+	for context, commands := range c.CustomCommands {
+		for idx := range commands {
+			label := fmt.Sprintf("customCommands[%q][%d]", context, idx)
+			if err := normalizeCommand(&commands[idx], label); err != nil {
+				return err
+			}
 		}
-		for argIndex := range command.Args {
-			command.Args[argIndex] = strings.TrimSpace(command.Args[argIndex])
-		}
+	}
+	return nil
+}
+
+func normalizeCommand(command *Command, label string) error {
+	command.Name = strings.TrimSpace(command.Name)
+	if command.Name == "" {
+		return fmt.Errorf("%s.name is required", label)
+	}
+	if len(command.Args) == 0 || strings.TrimSpace(command.Args[0]) == "" {
+		return fmt.Errorf("%s.args must start with a container subcommand", label)
+	}
+	for argIndex := range command.Args {
+		command.Args[argIndex] = strings.TrimSpace(command.Args[argIndex])
 	}
 	return nil
 }

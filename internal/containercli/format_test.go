@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestFirstPublishedURL(t *testing.T) {
+	c := Container{Configuration: ContainerConfiguration{PublishedPorts: []Port{
+		{HostPort: 0, ContainerPort: 5432},
+		{HostAddress: "0.0.0.0", HostPort: 8080, ContainerPort: 80},
+	}}}
+	url, ok := c.FirstPublishedURL()
+	if !ok || url != "http://localhost:8080" {
+		t.Fatalf("FirstPublishedURL = %q, %v", url, ok)
+	}
+
+	none := Container{}
+	if _, ok := none.FirstPublishedURL(); ok {
+		t.Fatalf("expected no URL when no ports are published")
+	}
+}
+
 func TestStatSummaryLinesFormatsAppleStatsShape(t *testing.T) {
 	stat := Stat{
 		"id":               "web",

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -65,11 +66,14 @@ func runTUI(stderr io.Writer) int {
 	if err != nil {
 		opts.StartupWarning = configWarning(path, err)
 	} else {
-		opts.CustomCommands = customCommands(cfg.Commands)
+		opts.CustomCommands = customCommands(cfg)
+		applyConfigToOptions(&opts, cfg)
 	}
 	opts.ConfigPath = path
 	opts.OpenConfigCommand = openConfigCommand
 	opts.LoadConfigCommands = loadConfigCommands
+	opts.ReloadConfig = reloadConfig
+	opts.OpenLinkCommand = openLinkCommand
 	program := tea.NewProgram(tui.NewWithOptions(client, opts), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintf(stderr, "lazycont: %v\n", err)
@@ -92,6 +96,15 @@ func openConfigCommand(path string) (*exec.Cmd, error) {
 	return editorCommand(editor, path)
 }
 
+// openLinkCommand opens a URL in the default browser on macOS.
+func openLinkCommand(url string) (*exec.Cmd, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return nil, errors.New("url is required")
+	}
+	return exec.Command("open", url), nil
+}
+
 func editorCommand(editor string, path string) (*exec.Cmd, error) {
 	parts := strings.Fields(editor)
 	if len(parts) == 0 {
@@ -106,7 +119,19 @@ func loadConfigCommands() ([]tui.CustomCommand, error) {
 	if err != nil {
 		return nil, err
 	}
-	return customCommands(cfg.Commands), nil
+	return customCommands(cfg), nil
+}
+
+// reloadConfig re-reads the config file and returns a fresh Options so the TUI
+// can reapply commands, theme, and gui/log settings after an in-session edit.
+func reloadConfig() (tui.Options, error) {
+	cfg, _, err := appconfig.LoadDefault()
+	if err != nil {
+		return tui.Options{}, err
+	}
+	opts := tui.Options{CustomCommands: customCommands(cfg)}
+	applyConfigToOptions(&opts, cfg)
+	return opts, nil
 }
 
 func configWarning(path string, err error) string {
@@ -116,13 +141,36 @@ func configWarning(path string, err error) string {
 	return fmt.Sprintf("config %s: %v", path, err)
 }
 
-func customCommands(commands []appconfig.Command) []tui.CustomCommand {
-	out := make([]tui.CustomCommand, 0, len(commands))
-	for _, command := range commands {
-		out = append(out, tui.CustomCommand{
-			Name: command.Name,
-			Args: append([]string(nil), command.Args...),
-		})
+// customCommands flattens the legacy flat command list and every per-context
+// customCommands group into a single list. Placeholder expansion ({container},
+// {image}, …) naturally scopes each command to the relevant resource.
+func customCommands(cfg appconfig.Config) []tui.CustomCommand {
+	var out []tui.CustomCommand
+	add := func(commands []appconfig.Command) {
+		for _, command := range commands {
+			out = append(out, tui.CustomCommand{
+				Name:   command.Name,
+				Args:   append([]string(nil), command.Args...),
+				Attach: command.Attach,
+			})
+		}
+	}
+	add(cfg.Commands)
+	for _, context := range appconfig.ContainerContexts {
+		add(cfg.CustomCommands[context])
 	}
 	return out
+}
+
+func applyConfigToOptions(opts *tui.Options, cfg appconfig.Config) {
+	opts.ScreenMode = cfg.GUI.ScreenMode
+	opts.SidePanelWidth = cfg.GUI.SidePanelWidth
+	opts.BorderStyle = cfg.GUI.Border
+	opts.ActiveColor = cfg.GUI.Theme.ActiveBorderColor
+	opts.SelectedBgColor = cfg.GUI.Theme.SelectedLineBgColor
+	opts.LogsTail = cfg.Logs.Tail
+	opts.LogsSince = cfg.Logs.Since
+	if cfg.RefreshIntervalMs > 0 {
+		opts.RefreshInterval = time.Duration(cfg.RefreshIntervalMs) * time.Millisecond
+	}
 }

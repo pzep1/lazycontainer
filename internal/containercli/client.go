@@ -232,12 +232,32 @@ func (c *Client) Exec(ctx context.Context, id string, command string) (string, e
 	return string(output), err
 }
 
+// Top lists the processes running inside a container. Apple's container CLI has
+// no dedicated top subcommand, so this runs `ps` inside the container.
+func (c *Client) Top(ctx context.Context, id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("container id is required")
+	}
+	output, err := c.run(ctx, "exec", id, "ps", "-ef")
+	return string(output), err
+}
+
 func (c *Client) Command(ctx context.Context, args []string) (string, error) {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return "", errors.New("container command is required")
 	}
 	output, err := c.runLong(ctx, args...)
 	return string(output), err
+}
+
+// CommandProcess builds an attachable `container <args>` command for custom
+// commands that take over the terminal (attach: true).
+func (c *Client) CommandProcess(args []string) (*exec.Cmd, error) {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return nil, errors.New("container command is required")
+	}
+	return exec.Command(c.binaryName(), args...), nil
 }
 
 func (c *Client) MachineShellCommand(id string) (*exec.Cmd, error) {

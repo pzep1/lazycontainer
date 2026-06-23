@@ -53,6 +53,46 @@ func TestLoadRejectsInvalidCustomCommand(t *testing.T) {
 	}
 }
 
+func TestLoadGUILogsAndPerContextCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, `{
+		"gui": {"sidePanelWidth": 0.4, "screenMode": "half", "border": "double", "theme": {"activeBorderColor": "201", "selectedLineBgColor": "57"}},
+		"logs": {"tail": 500, "since": "10m"},
+		"refreshIntervalMs": 2000,
+		"customCommands": {
+			"containers": [{"name": "Shell", "args": ["exec", "-it", "{container}", "sh"], "attach": true}]
+		}
+	}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GUI.ScreenMode != "half" || cfg.GUI.Border != "double" || cfg.GUI.SidePanelWidth != 0.4 {
+		t.Fatalf("gui mismatch: %#v", cfg.GUI)
+	}
+	if cfg.GUI.Theme.ActiveBorderColor != "201" || cfg.GUI.Theme.SelectedLineBgColor != "57" {
+		t.Fatalf("theme mismatch: %#v", cfg.GUI.Theme)
+	}
+	if cfg.Logs.Tail != 500 || cfg.Logs.Since != "10m" || cfg.RefreshIntervalMs != 2000 {
+		t.Fatalf("logs/refresh mismatch: %#v %d", cfg.Logs, cfg.RefreshIntervalMs)
+	}
+	cc := cfg.CustomCommands["containers"]
+	if len(cc) != 1 || cc[0].Name != "Shell" || !cc[0].Attach {
+		t.Fatalf("per-context command mismatch: %#v", cc)
+	}
+}
+
+func TestLoadRejectsInvalidPerContextCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, `{"customCommands": {"images": [{"name": "", "args": ["x"]}]}}`)
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), `customCommands["images"][0].name`) {
+		t.Fatalf("err = %v, want per-context name validation error", err)
+	}
+}
+
 func TestLoadRejectsTrailingJSONData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	writeConfig(t, path, `{"commands": []} {"commands": []}`)
