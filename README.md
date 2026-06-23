@@ -9,11 +9,12 @@ This is an early usable slice focused on day-to-day container work:
 - browse image builder status
 - browse container machines
 - browse registry logins
+- browse Apple container system diagnostics
 - filter resource lists across names and metadata
 - inspect selected resources
 - view image variant and layer history
-- tail container or machine logs
-- follow container or machine logs in the terminal
+- tail container, machine, or system logs
+- follow container, machine, or system logs in the terminal
 - run one-off commands in selected running containers
 - view container CPU, memory, network, disk, and process metrics
 - export a selected container filesystem as a tar archive
@@ -28,6 +29,7 @@ This is an early usable slice focused on day-to-day container work:
 - start, restart, stop, kill, and delete containers
 - create, stop, delete, and set default machines
 - create volumes and networks
+- start and stop Apple container services
 - prune stopped containers and unused images, volumes, or networks
 - delete images, volumes, networks, or machines
 - auto-refresh Apple container system status, lists, and one-shot stats
@@ -53,7 +55,7 @@ go build -o bin/lazycont ./cmd/lazycont
 
 | Key | Action |
 | --- | --- |
-| `tab` | Switch between containers, images, builder, volumes, networks, machines, and registries |
+| `tab` | Switch between containers, images, builder, volumes, networks, machines, registries, and system |
 | `/` | Filter resource lists |
 | `esc` | Clear the active filter |
 | `up` / `k` | Move selection up |
@@ -75,13 +77,13 @@ go build -o bin/lazycont ./cmd/lazycont
 | `i` / `enter` | Inspect selected resource |
 | `c` | Copy files for the selected container as `<src> <dest>`; use `:/path` for the selected container |
 | `E` | Export selected container filesystem to a tar archive |
-| `l` | Tail selected container or machine logs |
-| `f` | Follow selected container or machine logs until the command exits |
+| `l` | Tail selected container, machine, or system logs |
+| `f` | Follow selected container, machine, or system logs until the command exits |
 | `e` | Open `/bin/sh` in the selected running container, or a shell in the selected machine |
 | `X` | Run a one-off command in the selected running container and show its output |
-| `s` | Start selected container, or start the builder from the builder pane |
+| `s` | Start selected container, builder, or Apple container services |
 | `ctrl+r` | Restart selected running container |
-| `x` | Stop selected container, machine, or builder |
+| `x` | Stop selected container, machine, builder, or Apple container services |
 | `K` | Kill selected container |
 | `d` | Delete selected container, image, builder, volume, network, or machine, or log out of selected registry, with confirmation |
 | `p` | Prune stopped containers or unused images, volumes, or networks, with confirmation |

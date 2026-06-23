@@ -9,6 +9,57 @@ import (
 	"time"
 )
 
+func (s SystemStatus) DetailLines(usage SystemDiskUsage, versions []SystemVersion) []string {
+	lines := []string{
+		"System",
+		"  Status:      " + emptyDash(s.Status),
+		"  API server:  " + emptyDash(s.APIServerAppName),
+		"  API build:   " + emptyDash(s.APIServerBuild),
+		"  API commit:  " + emptyDash(shortDigest(s.APIServerCommit)),
+		"  API version: " + emptyDash(s.APIServerVersion),
+		"  App root:    " + emptyDash(s.AppRoot),
+		"  Install:     " + emptyDash(s.InstallRoot),
+		"",
+		"Disk usage",
+	}
+	lines = append(lines, usage.DetailLines()...)
+	if len(versions) > 0 {
+		lines = append(lines, "", "Versions")
+		for _, version := range versions {
+			lines = append(lines, version.DetailLine())
+		}
+	}
+	return lines
+}
+
+func (u SystemDiskUsage) DetailLines() []string {
+	return []string{
+		diskUsageLine("  Containers", u.Containers),
+		diskUsageLine("  Images", u.Images),
+		diskUsageLine("  Volumes", u.Volumes),
+	}
+}
+
+func (u SystemDiskUsage) TotalSize() string {
+	return FormatBytes(u.Containers.SizeInBytes + u.Images.SizeInBytes + u.Volumes.SizeInBytes)
+}
+
+func (u SystemDiskUsage) TotalReclaimable() string {
+	return FormatBytes(u.Containers.Reclaimable + u.Images.Reclaimable + u.Volumes.Reclaimable)
+}
+
+func diskUsageLine(name string, category DiskUsageCategory) string {
+	return fmt.Sprintf("%s: %d total, %d active, %s used, %s reclaimable", name, category.Total, category.Active, FormatBytes(category.SizeInBytes), FormatBytes(category.Reclaimable))
+}
+
+func (v SystemVersion) DetailLine() string {
+	name := emptyDash(v.AppName)
+	version := emptyDash(v.Version)
+	build := emptyDash(v.BuildType)
+	commit := emptyDash(shortDigest(v.Commit))
+	return fmt.Sprintf("  %s: %s (%s, %s)", name, version, build, commit)
+}
+
 func (c Container) Name() string {
 	if c.ID != "" {
 		return c.ID

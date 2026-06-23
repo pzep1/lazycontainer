@@ -60,6 +60,58 @@ func TestContainersParsesAppleJSONShape(t *testing.T) {
 	}
 }
 
+func TestSystemDiskUsageParsesAppleJSONShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`{
+		"containers": {"active": 1, "reclaimable": 5833977856, "sizeInBytes": 6589943808, "total": 9},
+		"images": {"active": 4, "reclaimable": 2625372160, "sizeInBytes": 14597648384, "total": 6},
+		"volumes": {"active": 8, "reclaimable": 0, "sizeInBytes": 16260087808, "total": 8}
+	}`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	usage, err := client.SystemDiskUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Containers.Total != 9 || usage.Images.Active != 4 || usage.Volumes.SizeInBytes != 16260087808 {
+		t.Fatalf("unexpected system disk usage: %#v", usage)
+	}
+	if usage.TotalSize() != "34.9 GB" {
+		t.Fatalf("unexpected total size %q", usage.TotalSize())
+	}
+	if usage.TotalReclaimable() != "7.9 GB" {
+		t.Fatalf("unexpected reclaimable size %q", usage.TotalReclaimable())
+	}
+
+	wantArgs := []string{"system", "df", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestSystemVersionParsesAppleJSONShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`[
+		{"appName":"container","buildType":"release","commit":"ee848e3ebfd7c73b04dd419683be54fb450b8779","version":"1.0.0"},
+		{"appName":"container-apiserver","buildType":"release","commit":"ee848e3ebfd7c73b04dd419683be54fb450b8779","version":"container-apiserver version 1.0.0 (build: release, commit: ee848e3)"}
+	]`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	versions, err := client.SystemVersion(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 versions, got %d", len(versions))
+	}
+	if versions[0].AppName != "container" || versions[0].Version != "1.0.0" {
+		t.Fatalf("unexpected first version: %#v", versions[0])
+	}
+
+	wantArgs := []string{"system", "version", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
 func TestImagesParsesVariants(t *testing.T) {
 	runner := &fakeRunner{output: []byte(`[
 		{
@@ -468,6 +520,49 @@ func TestMachineCommandsUseSelectedMachineID(t *testing.T) {
 	wantDelete := []string{"machine", "delete", "dev-machine"}
 	if !reflect.DeepEqual(runner.args, wantDelete) {
 		t.Fatalf("machine delete args mismatch\nwant: %#v\n got: %#v", wantDelete, runner.args)
+	}
+}
+
+func TestSystemCommandsUseAppleSubcommands(t *testing.T) {
+	client := &Client{Binary: "container"}
+
+	follow, err := client.FollowSystemLogsCommand("10m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFollow := []string{"system", "logs", "--follow", "--last", "10m"}
+	if !reflect.DeepEqual(follow.Args[1:], wantFollow) {
+		t.Fatalf("system follow logs args mismatch\nwant: %#v\n got: %#v", wantFollow, follow.Args[1:])
+	}
+
+	runner := &fakeRunner{output: []byte("system ready\n")}
+	client = &Client{Binary: "container", Runner: runner, Timeout: time.Second, LongTimeout: time.Second}
+	body, err := client.SystemLogs(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "system ready\n" {
+		t.Fatalf("unexpected system logs body %q", body)
+	}
+	wantLogs := []string{"system", "logs", "--last", "5m"}
+	if !reflect.DeepEqual(runner.args, wantLogs) {
+		t.Fatalf("system logs args mismatch\nwant: %#v\n got: %#v", wantLogs, runner.args)
+	}
+
+	if err := client.StartSystem(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantStart := []string{"system", "start"}
+	if !reflect.DeepEqual(runner.args, wantStart) {
+		t.Fatalf("system start args mismatch\nwant: %#v\n got: %#v", wantStart, runner.args)
+	}
+
+	if err := client.StopSystem(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantStop := []string{"system", "stop"}
+	if !reflect.DeepEqual(runner.args, wantStop) {
+		t.Fatalf("system stop args mismatch\nwant: %#v\n got: %#v", wantStop, runner.args)
 	}
 }
 

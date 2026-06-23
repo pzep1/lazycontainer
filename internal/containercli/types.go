@@ -15,6 +15,26 @@ type SystemStatus struct {
 	Status           string `json:"status"`
 }
 
+type SystemDiskUsage struct {
+	Containers DiskUsageCategory `json:"containers"`
+	Images     DiskUsageCategory `json:"images"`
+	Volumes    DiskUsageCategory `json:"volumes"`
+}
+
+type DiskUsageCategory struct {
+	Active      int   `json:"active"`
+	Reclaimable int64 `json:"reclaimable"`
+	SizeInBytes int64 `json:"sizeInBytes"`
+	Total       int   `json:"total"`
+}
+
+type SystemVersion struct {
+	AppName   string `json:"appName"`
+	BuildType string `json:"buildType"`
+	Commit    string `json:"commit"`
+	Version   string `json:"version"`
+}
+
 type Container struct {
 	ID            string                 `json:"id"`
 	Configuration ContainerConfiguration `json:"configuration"`

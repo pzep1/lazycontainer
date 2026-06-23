@@ -47,6 +47,10 @@ type fakeClient struct {
 	builderStarted bool
 	builderStopped bool
 	builderDeleted bool
+	systemLogsRead bool
+	systemFollowed bool
+	systemStarted  bool
+	systemStopped  bool
 	deleted        string
 	createdVolume  string
 	volumeSize     string
@@ -59,7 +63,37 @@ type fakeClient struct {
 }
 
 func (f *fakeClient) SystemStatus(context.Context) (containercli.SystemStatus, error) {
-	return containercli.SystemStatus{Status: "running"}, nil
+	return containercli.SystemStatus{
+		Status:           "running",
+		APIServerAppName: "container-apiserver",
+		APIServerBuild:   "release",
+		APIServerCommit:  "ee848e3ebfd7c73b04dd419683be54fb450b8779",
+		APIServerVersion: "container-apiserver version 1.0.0",
+		AppRoot:          "/Users/example/Library/Application Support/com.apple.container/",
+		InstallRoot:      "/usr/local/",
+	}, nil
+}
+
+func (f *fakeClient) SystemDiskUsage(context.Context) (containercli.SystemDiskUsage, error) {
+	return containercli.SystemDiskUsage{
+		Containers: containercli.DiskUsageCategory{Total: 9, Active: 1, SizeInBytes: 6589943808, Reclaimable: 5833977856},
+		Images:     containercli.DiskUsageCategory{Total: 6, Active: 4, SizeInBytes: 14597648384, Reclaimable: 2625372160},
+		Volumes:    containercli.DiskUsageCategory{Total: 8, Active: 8, SizeInBytes: 16260087808},
+	}, nil
+}
+
+func (f *fakeClient) SystemVersion(context.Context) ([]containercli.SystemVersion, error) {
+	return []containercli.SystemVersion{{
+		AppName:   "container",
+		BuildType: "release",
+		Commit:    "ee848e3ebfd7c73b04dd419683be54fb450b8779",
+		Version:   "1.0.0",
+	}, {
+		AppName:   "container-apiserver",
+		BuildType: "release",
+		Commit:    "ee848e3ebfd7c73b04dd419683be54fb450b8779",
+		Version:   "container-apiserver version 1.0.0",
+	}}, nil
 }
 
 func (f *fakeClient) Containers(context.Context) ([]containercli.Container, error) {
@@ -170,6 +204,16 @@ func (f *fakeClient) MachineLogs(_ context.Context, id string, _ int) (string, e
 
 func (f *fakeClient) FollowMachineLogsCommand(id string, _ int) (*exec.Cmd, error) {
 	f.machineLogsID = id
+	return exec.Command("true"), nil
+}
+
+func (f *fakeClient) SystemLogs(context.Context, string) (string, error) {
+	f.systemLogsRead = true
+	return "system ready\n", nil
+}
+
+func (f *fakeClient) FollowSystemLogsCommand(string) (*exec.Cmd, error) {
+	f.systemFollowed = true
 	return exec.Command("true"), nil
 }
 
@@ -290,6 +334,16 @@ func (f *fakeClient) DeleteBuilder(context.Context, bool) error {
 	return nil
 }
 
+func (f *fakeClient) StartSystem(context.Context) error {
+	f.systemStarted = true
+	return nil
+}
+
+func (f *fakeClient) StopSystem(context.Context) error {
+	f.systemStopped = true
+	return nil
+}
+
 func (f *fakeClient) Copy(_ context.Context, source string, destination string) error {
 	f.copySource = source
 	f.copyDest = destination
@@ -394,7 +448,7 @@ func TestModelLoadsSnapshotIntoView(t *testing.T) {
 	if !strings.Contains(view, "containers 1") {
 		t.Fatalf("view did not include container count:\n%s", view)
 	}
-	if !strings.Contains(view, "builder 1") || !strings.Contains(view, "volumes 1") || !strings.Contains(view, "networks 1") || !strings.Contains(view, "machines 1") || !strings.Contains(view, "registries 1") {
+	if !strings.Contains(view, "builder 1") || !strings.Contains(view, "volumes 1") || !strings.Contains(view, "networks 1") || !strings.Contains(view, "machines 1") || !strings.Contains(view, "registries 1") || !strings.Contains(view, "system 1") {
 		t.Fatalf("view did not include secondary resource counts:\n%s", view)
 	}
 }
@@ -521,6 +575,70 @@ func TestBuilderPaneShowsStatusAndLifecycleActions(t *testing.T) {
 	}
 	if !client.builderDeleted {
 		t.Fatalf("expected builder delete call")
+	}
+}
+
+func TestSystemPaneShowsDiagnosticsLogsAndLifecycleActions(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 130, Height: 32})
+	updated, _ = updated.Update(msg)
+	updated = switchToSystem(t, updated)
+
+	view := updated.View()
+	for _, want := range []string{"system 1", "running", "Disk usage", "Containers: 9 total", "Versions", "container: 1.0.0"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view did not include %q:\n%s", want, view)
+		}
+	}
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil {
+		t.Fatalf("expected system logs command")
+	}
+	logs := cmd().(outputMsg)
+	updated, _ = updated.Update(logs)
+	if !client.systemLogsRead {
+		t.Fatalf("expected system logs call")
+	}
+	if !strings.Contains(updated.View(), "system ready") {
+		t.Fatalf("view did not show system logs:\n%s", updated.View())
+	}
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatalf("expected follow system logs command")
+	}
+	if !client.systemFollowed {
+		t.Fatalf("expected follow system logs call")
+	}
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if cmd == nil {
+		t.Fatalf("expected start system command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after start system")
+	}
+	if !client.systemStarted {
+		t.Fatalf("expected system start call")
+	}
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	_, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected confirmed stop system command")
+	}
+	done = cmd().(actionDoneMsg)
+	updated, refresh = updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after stop system")
+	}
+	if !client.systemStopped {
+		t.Fatalf("expected system stop call")
 	}
 }
 
@@ -1474,6 +1592,11 @@ func switchToMachines(t *testing.T, model tea.Model) tea.Model {
 func switchToRegistries(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
 	return switchTabs(t, model, 6)
+}
+
+func switchToSystem(t *testing.T, model tea.Model) tea.Model {
+	t.Helper()
+	return switchTabs(t, model, 7)
 }
 
 func switchTabs(t *testing.T, model tea.Model, count int) tea.Model {

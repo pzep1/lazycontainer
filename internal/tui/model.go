@@ -17,6 +17,8 @@ import (
 
 type Client interface {
 	SystemStatus(context.Context) (containercli.SystemStatus, error)
+	SystemDiskUsage(context.Context) (containercli.SystemDiskUsage, error)
+	SystemVersion(context.Context) ([]containercli.SystemVersion, error)
 	Containers(context.Context) ([]containercli.Container, error)
 	Images(context.Context) ([]containercli.Image, error)
 	Volumes(context.Context) ([]containercli.Volume, error)
@@ -29,6 +31,8 @@ type Client interface {
 	FollowLogsCommand(string, int) (*exec.Cmd, error)
 	MachineLogs(context.Context, string, int) (string, error)
 	FollowMachineLogsCommand(string, int) (*exec.Cmd, error)
+	SystemLogs(context.Context, string) (string, error)
+	FollowSystemLogsCommand(string) (*exec.Cmd, error)
 	InspectContainer(context.Context, string) (string, error)
 	InspectImage(context.Context, string) (string, error)
 	InspectVolume(context.Context, string) (string, error)
@@ -52,6 +56,8 @@ type Client interface {
 	StartBuilder(context.Context) error
 	StopBuilder(context.Context) error
 	DeleteBuilder(context.Context, bool) error
+	StartSystem(context.Context) error
+	StopSystem(context.Context) error
 	Copy(context.Context, string, string) error
 	ExportContainer(context.Context, string, string) error
 	Start(context.Context, string) error
@@ -82,6 +88,7 @@ const (
 	resourceNetworks
 	resourceMachines
 	resourceRegistries
+	resourceSystem
 	resourceCount
 )
 
@@ -108,6 +115,7 @@ const (
 	confirmDeleteMachine
 	confirmLogoutRegistry
 	confirmDeleteBuilder
+	confirmStopSystem
 )
 
 type promptKind int
@@ -150,15 +158,17 @@ type Model struct {
 	machineCursor   int
 	registryCursor  int
 
-	containers []containercli.Container
-	images     []containercli.Image
-	volumes    []containercli.Volume
-	networks   []containercli.NetworkResource
-	machines   []containercli.Machine
-	registries []containercli.RegistryLogin
-	builder    containercli.BuilderStatus
-	stats      []containercli.Stat
-	system     containercli.SystemStatus
+	containers     []containercli.Container
+	images         []containercli.Image
+	volumes        []containercli.Volume
+	networks       []containercli.NetworkResource
+	machines       []containercli.Machine
+	registries     []containercli.RegistryLogin
+	builder        containercli.BuilderStatus
+	systemUsage    containercli.SystemDiskUsage
+	systemVersions []containercli.SystemVersion
+	stats          []containercli.Stat
+	system         containercli.SystemStatus
 
 	panelMode    panelMode
 	panelTitle   string
@@ -183,17 +193,19 @@ type Model struct {
 }
 
 type snapshotMsg struct {
-	system     containercli.SystemStatus
-	containers []containercli.Container
-	images     []containercli.Image
-	volumes    []containercli.Volume
-	networks   []containercli.NetworkResource
-	machines   []containercli.Machine
-	registries []containercli.RegistryLogin
-	builder    containercli.BuilderStatus
-	stats      []containercli.Stat
-	err        error
-	updated    time.Time
+	system         containercli.SystemStatus
+	containers     []containercli.Container
+	images         []containercli.Image
+	volumes        []containercli.Volume
+	networks       []containercli.NetworkResource
+	machines       []containercli.Machine
+	registries     []containercli.RegistryLogin
+	builder        containercli.BuilderStatus
+	systemUsage    containercli.SystemDiskUsage
+	systemVersions []containercli.SystemVersion
+	stats          []containercli.Stat
+	err            error
+	updated        time.Time
 }
 
 type outputMsg struct {
@@ -252,6 +264,8 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.machines = msg.machines
 		m.registries = msg.registries
 		m.builder = msg.builder
+		m.systemUsage = msg.systemUsage
+		m.systemVersions = msg.systemVersions
 		m.stats = msg.stats
 		m.err = msg.err
 		m.lastUpdated = msg.updated
@@ -423,6 +437,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "X":
 		return m.startExecPrompt()
 	case "s":
+		if m.active == resourceSystem {
+			return m.startSystem()
+		}
 		if m.active == resourceBuilder {
 			return m.startBuilder()
 		}
@@ -430,6 +447,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.client.Start(ctx, id)
 		})
 	case "x":
+		if m.active == resourceSystem {
+			m.confirm = &pendingConfirm{action: confirmStopSystem, label: "Stop all container services?"}
+			return m, nil
+		}
 		if m.active == resourceBuilder {
 			return m.stopBuilder()
 		}
@@ -1068,6 +1089,16 @@ func (m Model) refreshCmd() tea.Cmd {
 		} else {
 			msg.system = status
 		}
+		if usage, err := m.client.SystemDiskUsage(ctx); err != nil {
+			errs = append(errs, err)
+		} else {
+			msg.systemUsage = usage
+		}
+		if versions, err := m.client.SystemVersion(ctx); err != nil {
+			errs = append(errs, err)
+		} else {
+			msg.systemVersions = versions
+		}
 		if containers, err := m.client.Containers(ctx); err != nil {
 			errs = append(errs, err)
 		} else {
@@ -1248,6 +1279,16 @@ func (m Model) inspectSelected() (tea.Model, tea.Cmd) {
 		m.panelOffset = 0
 		m.statusLine = "loaded registry " + name
 		return m, nil
+	case resourceSystem:
+		if !m.systemMatchesFilter() {
+			return m, nil
+		}
+		m.panelMode = panelInspect
+		m.panelTitle = "System"
+		m.panelBody = strings.Join(m.system.DetailLines(m.systemUsage, m.systemVersions), "\n")
+		m.panelOffset = 0
+		m.statusLine = "loaded system"
+		return m, nil
 	}
 	return m, nil
 }
@@ -1283,6 +1324,19 @@ func (m Model) logsSelected() (tea.Model, tea.Cmd) {
 				body = "No machine logs returned."
 			}
 			return outputMsg{title: "Machine logs " + id, body: body, err: err}
+		}
+	case resourceSystem:
+		if !m.systemMatchesFilter() {
+			return m, nil
+		}
+		m.busy = "loading system logs"
+		m.panelMode = panelLogs
+		return m, func() tea.Msg {
+			body, err := m.client.SystemLogs(context.Background(), "5m")
+			if strings.TrimSpace(body) == "" && err == nil {
+				body = "No system logs returned."
+			}
+			return outputMsg{title: "System logs", body: body, err: err}
 		}
 	}
 	return m, nil
@@ -1323,6 +1377,12 @@ func (m Model) followLogsCommandForSelection() (string, *exec.Cmd, error) {
 		id := machine.Name()
 		cmd, err := m.client.FollowMachineLogsCommand(id, 200)
 		return id, cmd, err
+	case resourceSystem:
+		if !m.systemMatchesFilter() {
+			return "", nil, nil
+		}
+		cmd, err := m.client.FollowSystemLogsCommand("5m")
+		return "system", cmd, err
 	default:
 		return "", nil, nil
 	}
@@ -1467,6 +1527,18 @@ func (m Model) stopBuilder() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) startSystem() (tea.Model, tea.Cmd) {
+	if m.active != resourceSystem {
+		return m, nil
+	}
+	m.busy = "starting system"
+	m.statusLine = "starting container services"
+	return m, func() tea.Msg {
+		err := m.client.StartSystem(context.Background())
+		return actionDoneMsg{message: "started container services", err: err}
+	}
+}
+
 func (m Model) lifecycleSelected(busy string, done string, action func(context.Context, string) error) (tea.Model, tea.Cmd) {
 	if m.active == resourceMachines && busy == "stopping" {
 		machine, ok := m.selectedMachine()
@@ -1581,6 +1653,9 @@ func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
 		case confirmDeleteBuilder:
 			err := m.client.DeleteBuilder(ctx, false)
 			return actionDoneMsg{message: "deleted builder", err: err}
+		case confirmStopSystem:
+			err := m.client.StopSystem(ctx)
+			return actionDoneMsg{message: "stopped container services", err: err}
 		default:
 			return actionDoneMsg{err: errors.New("unknown action")}
 		}
@@ -1884,6 +1959,8 @@ func (m Model) renderSidebar(width int, height int) string {
 		lines = append(lines, m.renderMachineList(width-4, listHeight)...)
 	case resourceRegistries:
 		lines = append(lines, m.renderRegistryList(width-4, listHeight)...)
+	case resourceSystem:
+		lines = append(lines, m.renderSystemList(width-4, listHeight)...)
 	}
 	return style.Render(strings.Join(lines, "\n"))
 }
@@ -1896,7 +1973,8 @@ func (m Model) renderTabs() string {
 	networks := m.tabLabel("networks", len(m.filteredNetworkIndexes()), len(m.networks))
 	machines := m.tabLabel("machines", len(m.filteredMachineIndexes()), len(m.machines))
 	registries := m.tabLabel("registries", len(m.filteredRegistryIndexes()), len(m.registries))
-	tabs := []string{containers, images, builder, volumes, networks, machines, registries}
+	system := m.tabLabel("system", m.filteredSystemCount(), 1)
+	tabs := []string{containers, images, builder, volumes, networks, machines, registries, system}
 	for idx := range tabs {
 		label := " " + tabs[idx] + " "
 		if resourceKind(idx) == m.active {
@@ -1905,7 +1983,7 @@ func (m Model) renderTabs() string {
 			tabs[idx] = mutedStyle.Render(label)
 		}
 	}
-	return strings.Join(tabs[:3], " ") + "\n" + strings.Join(tabs[3:], " ")
+	return strings.Join(tabs[:3], " ") + "\n" + strings.Join(tabs[3:6], " ") + "\n" + strings.Join(tabs[6:], " ")
 }
 
 func (m Model) tabLabel(name string, filtered int, total int) string {
@@ -2081,6 +2159,20 @@ func (m Model) renderRegistryList(width int, height int) []string {
 	return rows
 }
 
+func (m Model) renderSystemList(width int, height int) []string {
+	if !m.systemMatchesFilter() {
+		return []string{mutedStyle.Render(m.emptyListMessage("system"))}
+	}
+	rows := []string{mutedStyle.Render(fitColumns("system", "status", width))}
+	if height <= 1 {
+		return rows
+	}
+	meta := fmt.Sprintf("%s  %s used", emptyDash(m.system.Status), m.systemUsage.TotalSize())
+	line := fitColumns("system", meta, width)
+	line = selectedStyle.Width(width).Render(truncate(line, width))
+	return append(rows, line)
+}
+
 func (m Model) emptyListMessage(kind string) string {
 	if activeFilter(m.filter) == "" {
 		return "No " + kind + " found."
@@ -2152,6 +2244,11 @@ func (m Model) panelContent() (string, string) {
 			return "Details", "No registry selected."
 		}
 		return "Details " + registry.Name(), strings.Join(registry.DetailLines(), "\n")
+	case resourceSystem:
+		if !m.systemMatchesFilter() {
+			return "Details", "No system selected."
+		}
+		return "Details system", strings.Join(m.system.DetailLines(m.systemUsage, m.systemVersions), "\n")
 	default:
 		return "Details", ""
 	}
@@ -2255,6 +2352,33 @@ func (m Model) filteredRegistryIndexes() []int {
 		}
 	}
 	return indexes
+}
+
+func (m Model) filteredSystemCount() int {
+	if m.systemMatchesFilter() {
+		return 1
+	}
+	return 0
+}
+
+func (m Model) systemMatchesFilter() bool {
+	filter := activeFilter(m.filter)
+	versionFields := make([]string, 0, len(m.systemVersions)*3)
+	for _, version := range m.systemVersions {
+		versionFields = append(versionFields, version.AppName, version.Version, version.BuildType)
+	}
+	fields := []string{
+		"system",
+		m.system.Status,
+		m.system.APIServerAppName,
+		m.system.APIServerVersion,
+		m.system.AppRoot,
+		m.system.InstallRoot,
+		m.systemUsage.TotalSize(),
+		m.systemUsage.TotalReclaimable(),
+	}
+	fields = append(fields, versionFields...)
+	return filter == "" || matchFields(filter, fields...)
 }
 
 func activeFilter(value string) string {

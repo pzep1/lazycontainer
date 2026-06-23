@@ -48,6 +48,18 @@ func (c *Client) SystemStatus(ctx context.Context) (SystemStatus, error) {
 	return status, err
 }
 
+func (c *Client) SystemDiskUsage(ctx context.Context) (SystemDiskUsage, error) {
+	var usage SystemDiskUsage
+	err := c.runJSON(ctx, &usage, "system", "df", "--format", "json")
+	return usage, err
+}
+
+func (c *Client) SystemVersion(ctx context.Context) ([]SystemVersion, error) {
+	var versions []SystemVersion
+	err := c.runJSON(ctx, &versions, "system", "version", "--format", "json")
+	return versions, err
+}
+
 func (c *Client) Containers(ctx context.Context) ([]Container, error) {
 	var containers []Container
 	err := c.runJSON(ctx, &containers, "list", "--all", "--format", "json")
@@ -138,6 +150,23 @@ func (c *Client) FollowMachineLogsCommand(id string, lines int) (*exec.Cmd, erro
 		lines = 200
 	}
 	return exec.Command(c.binaryName(), "machine", "logs", "--follow", "-n", fmt.Sprintf("%d", lines), id), nil
+}
+
+func (c *Client) SystemLogs(ctx context.Context, last string) (string, error) {
+	last = strings.TrimSpace(last)
+	if last == "" {
+		last = "5m"
+	}
+	output, err := c.run(ctx, "system", "logs", "--last", last)
+	return string(output), err
+}
+
+func (c *Client) FollowSystemLogsCommand(last string) (*exec.Cmd, error) {
+	last = strings.TrimSpace(last)
+	if last == "" {
+		last = "5m"
+	}
+	return exec.Command(c.binaryName(), "system", "logs", "--follow", "--last", last), nil
 }
 
 func (c *Client) InspectContainer(ctx context.Context, id string) (string, error) {
@@ -365,6 +394,16 @@ func (c *Client) DeleteBuilder(ctx context.Context, force bool) error {
 		args = append(args, "--force")
 	}
 	_, err := c.runLong(ctx, args...)
+	return err
+}
+
+func (c *Client) StartSystem(ctx context.Context) error {
+	_, err := c.runLong(ctx, "system", "start")
+	return err
+}
+
+func (c *Client) StopSystem(ctx context.Context) error {
+	_, err := c.runLong(ctx, "system", "stop")
 	return err
 }
 
