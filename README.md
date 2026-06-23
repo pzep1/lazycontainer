@@ -6,6 +6,7 @@ This is an early usable slice focused on day-to-day container work:
 
 - browse containers and images
 - browse volumes and networks
+- browse image builder status
 - browse container machines
 - browse registry logins
 - filter resource lists across names and metadata
@@ -18,6 +19,7 @@ This is an early usable slice focused on day-to-day container work:
 - export a selected container filesystem as a tar archive
 - copy files or folders between a selected container and the local filesystem
 - build local images from a Dockerfile or Containerfile
+- start, stop, and delete the image builder
 - retag selected images
 - save and load image archives
 - push selected images to a registry
@@ -51,7 +53,7 @@ go build -o bin/lazycont ./cmd/lazycont
 
 | Key | Action |
 | --- | --- |
-| `tab` | Switch between containers, images, volumes, networks, machines, and registries |
+| `tab` | Switch between containers, images, builder, volumes, networks, machines, and registries |
 | `/` | Filter resource lists |
 | `esc` | Clear the active filter |
 | `up` / `k` | Move selection up |
@@ -77,11 +79,11 @@ go build -o bin/lazycont ./cmd/lazycont
 | `f` | Follow selected container or machine logs until the command exits |
 | `e` | Open `/bin/sh` in the selected running container, or a shell in the selected machine |
 | `X` | Run a one-off command in the selected running container and show its output |
-| `s` | Start selected container |
+| `s` | Start selected container, or start the builder from the builder pane |
 | `ctrl+r` | Restart selected running container |
-| `x` | Stop selected container or machine |
+| `x` | Stop selected container, machine, or builder |
 | `K` | Kill selected container |
-| `d` | Delete selected container, image, volume, network, or machine, or log out of selected registry, with confirmation |
+| `d` | Delete selected container, image, builder, volume, network, or machine, or log out of selected registry, with confirmation |
 | `p` | Prune stopped containers or unused images, volumes, or networks, with confirmation |
 | `?` | Toggle help |
 | `q` / `ctrl+c` | Quit |

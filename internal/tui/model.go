@@ -23,6 +23,7 @@ type Client interface {
 	Networks(context.Context) ([]containercli.NetworkResource, error)
 	Machines(context.Context) ([]containercli.Machine, error)
 	Registries(context.Context) ([]containercli.RegistryLogin, error)
+	BuilderStatus(context.Context) (containercli.BuilderStatus, error)
 	Stats(context.Context, ...string) ([]containercli.Stat, error)
 	Logs(context.Context, string, int) (string, error)
 	FollowLogsCommand(string, int) (*exec.Cmd, error)
@@ -48,6 +49,9 @@ type Client interface {
 	LoadImage(context.Context, string) error
 	RegistryLoginCommand(string, string) (*exec.Cmd, error)
 	LogoutRegistry(context.Context, string) error
+	StartBuilder(context.Context) error
+	StopBuilder(context.Context) error
+	DeleteBuilder(context.Context, bool) error
 	Copy(context.Context, string, string) error
 	ExportContainer(context.Context, string, string) error
 	Start(context.Context, string) error
@@ -73,6 +77,7 @@ type resourceKind int
 const (
 	resourceContainers resourceKind = iota
 	resourceImages
+	resourceBuilder
 	resourceVolumes
 	resourceNetworks
 	resourceMachines
@@ -102,6 +107,7 @@ const (
 	confirmPruneNetworks
 	confirmDeleteMachine
 	confirmLogoutRegistry
+	confirmDeleteBuilder
 )
 
 type promptKind int
@@ -150,6 +156,7 @@ type Model struct {
 	networks   []containercli.NetworkResource
 	machines   []containercli.Machine
 	registries []containercli.RegistryLogin
+	builder    containercli.BuilderStatus
 	stats      []containercli.Stat
 	system     containercli.SystemStatus
 
@@ -183,6 +190,7 @@ type snapshotMsg struct {
 	networks   []containercli.NetworkResource
 	machines   []containercli.Machine
 	registries []containercli.RegistryLogin
+	builder    containercli.BuilderStatus
 	stats      []containercli.Stat
 	err        error
 	updated    time.Time
@@ -243,6 +251,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.networks = msg.networks
 		m.machines = msg.machines
 		m.registries = msg.registries
+		m.builder = msg.builder
 		m.stats = msg.stats
 		m.err = msg.err
 		m.lastUpdated = msg.updated
@@ -414,10 +423,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "X":
 		return m.startExecPrompt()
 	case "s":
+		if m.active == resourceBuilder {
+			return m.startBuilder()
+		}
 		return m.lifecycleSelected("starting", "started", func(ctx context.Context, id string) error {
 			return m.client.Start(ctx, id)
 		})
 	case "x":
+		if m.active == resourceBuilder {
+			return m.stopBuilder()
+		}
 		return m.lifecycleSelected("stopping", "stopped", func(ctx context.Context, id string) error {
 			return m.client.Stop(ctx, id)
 		})
@@ -1110,6 +1125,11 @@ func (m Model) refreshCmd() tea.Cmd {
 			})
 			msg.registries = registries
 		}
+		if builder, err := m.client.BuilderStatus(ctx); err != nil {
+			errs = append(errs, err)
+		} else {
+			msg.builder = builder
+		}
 		if stats, err := m.client.Stats(ctx); err == nil {
 			msg.stats = stats
 		}
@@ -1170,6 +1190,16 @@ func (m Model) inspectSelected() (tea.Model, tea.Cmd) {
 			body, err := m.client.InspectImage(context.Background(), name)
 			return outputMsg{title: "Inspect " + name, body: body, err: err}
 		}
+	case resourceBuilder:
+		if !m.builderMatchesFilter() {
+			return m, nil
+		}
+		m.panelMode = panelInspect
+		m.panelTitle = "Builder"
+		m.panelBody = strings.Join(m.builder.DetailLines(), "\n")
+		m.panelOffset = 0
+		m.statusLine = "loaded builder"
+		return m, nil
 	case resourceVolumes:
 		volume, ok := m.selectedVolume()
 		if !ok {
@@ -1409,6 +1439,34 @@ func (m Model) setDefaultMachine() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) startBuilder() (tea.Model, tea.Cmd) {
+	if m.active != resourceBuilder {
+		return m, nil
+	}
+	m.busy = "starting builder"
+	m.statusLine = "starting builder"
+	return m, func() tea.Msg {
+		err := m.client.StartBuilder(context.Background())
+		return actionDoneMsg{message: "started builder", err: err}
+	}
+}
+
+func (m Model) stopBuilder() (tea.Model, tea.Cmd) {
+	if m.active != resourceBuilder {
+		return m, nil
+	}
+	if !m.builder.Present {
+		m.statusLine = "builder is not present"
+		return m, nil
+	}
+	m.busy = "stopping builder"
+	m.statusLine = "stopping builder"
+	return m, func() tea.Msg {
+		err := m.client.StopBuilder(context.Background())
+		return actionDoneMsg{message: "stopped builder", err: err}
+	}
+}
+
 func (m Model) lifecycleSelected(busy string, done string, action func(context.Context, string) error) (tea.Model, tea.Cmd) {
 	if m.active == resourceMachines && busy == "stopping" {
 		machine, ok := m.selectedMachine()
@@ -1452,6 +1510,12 @@ func (m *Model) prepareDelete() {
 		if ok {
 			name := image.Name()
 			m.confirm = &pendingConfirm{action: confirmDeleteImage, target: name, label: "Delete image " + name + "?"}
+		}
+	case resourceBuilder:
+		if m.builder.Present {
+			m.confirm = &pendingConfirm{action: confirmDeleteBuilder, target: m.builder.Name(), label: "Delete builder?"}
+		} else {
+			m.statusLine = "builder is not present"
 		}
 	case resourceVolumes:
 		volume, ok := m.selectedVolume()
@@ -1514,6 +1578,9 @@ func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
 		case confirmLogoutRegistry:
 			err := m.client.LogoutRegistry(ctx, confirm.target)
 			return actionDoneMsg{message: "logged out registry " + confirm.target, err: err}
+		case confirmDeleteBuilder:
+			err := m.client.DeleteBuilder(ctx, false)
+			return actionDoneMsg{message: "deleted builder", err: err}
 		default:
 			return actionDoneMsg{err: errors.New("unknown action")}
 		}
@@ -1807,6 +1874,8 @@ func (m Model) renderSidebar(width int, height int) string {
 		lines = append(lines, m.renderContainerList(width-4, listHeight)...)
 	case resourceImages:
 		lines = append(lines, m.renderImageList(width-4, listHeight)...)
+	case resourceBuilder:
+		lines = append(lines, m.renderBuilderList(width-4, listHeight)...)
 	case resourceVolumes:
 		lines = append(lines, m.renderVolumeList(width-4, listHeight)...)
 	case resourceNetworks:
@@ -1822,11 +1891,12 @@ func (m Model) renderSidebar(width int, height int) string {
 func (m Model) renderTabs() string {
 	containers := m.tabLabel("containers", len(m.filteredContainerIndexes()), len(m.containers))
 	images := m.tabLabel("images", len(m.filteredImageIndexes()), len(m.images))
+	builder := m.tabLabel("builder", m.filteredBuilderCount(), 1)
 	volumes := m.tabLabel("volumes", len(m.filteredVolumeIndexes()), len(m.volumes))
 	networks := m.tabLabel("networks", len(m.filteredNetworkIndexes()), len(m.networks))
 	machines := m.tabLabel("machines", len(m.filteredMachineIndexes()), len(m.machines))
 	registries := m.tabLabel("registries", len(m.filteredRegistryIndexes()), len(m.registries))
-	tabs := []string{containers, images, volumes, networks, machines, registries}
+	tabs := []string{containers, images, builder, volumes, networks, machines, registries}
 	for idx := range tabs {
 		label := " " + tabs[idx] + " "
 		if resourceKind(idx) == m.active {
@@ -1893,6 +1963,19 @@ func (m Model) renderImageList(width int, height int) []string {
 		rows = append(rows, line)
 	}
 	return rows
+}
+
+func (m Model) renderBuilderList(width int, height int) []string {
+	if !m.builderMatchesFilter() {
+		return []string{mutedStyle.Render(m.emptyListMessage("builder"))}
+	}
+	rows := []string{mutedStyle.Render(fitColumns("builder", "state", width))}
+	if height <= 1 {
+		return rows
+	}
+	line := fitColumns(m.builder.Name(), m.builder.State(), width)
+	line = selectedStyle.Width(width).Render(truncate(line, width))
+	return append(rows, line)
 }
 
 func (m Model) renderVolumeList(width int, height int) []string {
@@ -2040,6 +2123,11 @@ func (m Model) panelContent() (string, string) {
 			return "Details", "No image selected."
 		}
 		return "Details " + image.Name(), strings.Join(image.DetailLines(now), "\n")
+	case resourceBuilder:
+		if !m.builderMatchesFilter() {
+			return "Details", "No builder selected."
+		}
+		return "Details builder", strings.Join(m.builder.DetailLines(), "\n")
 	case resourceVolumes:
 		volume, ok := m.selectedVolume()
 		if !ok {
@@ -2111,6 +2199,18 @@ func (m Model) filteredImageIndexes() []int {
 		}
 	}
 	return indexes
+}
+
+func (m Model) filteredBuilderCount() int {
+	if m.builderMatchesFilter() {
+		return 1
+	}
+	return 0
+}
+
+func (m Model) builderMatchesFilter() bool {
+	filter := activeFilter(m.filter)
+	return filter == "" || matchFields(filter, "builder", m.builder.Name(), m.builder.State(), m.builder.CPUs(), m.builder.Memory())
 }
 
 func (m Model) filteredVolumeIndexes() []int {

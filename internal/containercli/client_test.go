@@ -269,6 +269,56 @@ func TestRegistriesParsesAppleJSONShape(t *testing.T) {
 	}
 }
 
+func TestBuilderStatusParsesEmptyAppleJSONShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`[]`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	builder, err := client.BuilderStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if builder.Present {
+		t.Fatalf("expected no builder to be present")
+	}
+	if builder.State() != "not created" {
+		t.Fatalf("unexpected builder state %q", builder.State())
+	}
+
+	wantArgs := []string{"builder", "status", "--format", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestBuilderStatusParsesObjectShape(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`{
+		"id":"buildkit",
+		"state":"running",
+		"configuration":{"resources":{"cpus":4,"memoryInBytes":4294967296}}
+	}`)}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second}
+
+	builder, err := client.BuilderStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !builder.Present {
+		t.Fatalf("expected builder to be present")
+	}
+	if builder.Name() != "buildkit" {
+		t.Fatalf("unexpected builder name %q", builder.Name())
+	}
+	if builder.State() != "running" {
+		t.Fatalf("unexpected builder state %q", builder.State())
+	}
+	if builder.CPUs() != "4" {
+		t.Fatalf("unexpected builder cpus %q", builder.CPUs())
+	}
+	if builder.Memory() != "4.0 GB" {
+		t.Fatalf("unexpected builder memory %q", builder.Memory())
+	}
+}
+
 func TestShellCommandUsesInteractiveTTYExec(t *testing.T) {
 	client := &Client{Binary: "container"}
 
@@ -329,6 +379,35 @@ func TestLogoutRegistryUsesSelectedRegistry(t *testing.T) {
 	wantArgs := []string{"registry", "logout", "ghcr.io"}
 	if !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
+	}
+}
+
+func TestBuilderLifecycleCommandsUseAppleSubcommands(t *testing.T) {
+	runner := &fakeRunner{}
+	client := &Client{Binary: "container", Runner: runner, Timeout: time.Second, LongTimeout: time.Second}
+
+	if err := client.StartBuilder(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantStart := []string{"builder", "start"}
+	if !reflect.DeepEqual(runner.args, wantStart) {
+		t.Fatalf("start args mismatch\nwant: %#v\n got: %#v", wantStart, runner.args)
+	}
+
+	if err := client.StopBuilder(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantStop := []string{"builder", "stop"}
+	if !reflect.DeepEqual(runner.args, wantStop) {
+		t.Fatalf("stop args mismatch\nwant: %#v\n got: %#v", wantStop, runner.args)
+	}
+
+	if err := client.DeleteBuilder(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	wantDelete := []string{"builder", "delete", "--force"}
+	if !reflect.DeepEqual(runner.args, wantDelete) {
+		t.Fatalf("delete args mismatch\nwant: %#v\n got: %#v", wantDelete, runner.args)
 	}
 }
 

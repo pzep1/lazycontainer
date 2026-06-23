@@ -84,6 +84,12 @@ func (c *Client) Registries(ctx context.Context) ([]RegistryLogin, error) {
 	return registries, err
 }
 
+func (c *Client) BuilderStatus(ctx context.Context) (BuilderStatus, error) {
+	var status BuilderStatus
+	err := c.runJSON(ctx, &status, "builder", "status", "--format", "json")
+	return status, err
+}
+
 func (c *Client) Stats(ctx context.Context, containerIDs ...string) ([]Stat, error) {
 	args := append([]string{"stats"}, containerIDs...)
 	args = append(args, "--format", "json", "--no-stream")
@@ -340,6 +346,25 @@ func (c *Client) LogoutRegistry(ctx context.Context, registry string) error {
 		return errors.New("registry server is required")
 	}
 	_, err := c.run(ctx, "registry", "logout", registry)
+	return err
+}
+
+func (c *Client) StartBuilder(ctx context.Context) error {
+	_, err := c.runLong(ctx, "builder", "start")
+	return err
+}
+
+func (c *Client) StopBuilder(ctx context.Context) error {
+	_, err := c.run(ctx, "builder", "stop")
+	return err
+}
+
+func (c *Client) DeleteBuilder(ctx context.Context, force bool) error {
+	args := []string{"builder", "delete"}
+	if force {
+		args = append(args, "--force")
+	}
+	_, err := c.runLong(ctx, args...)
 	return err
 }
 

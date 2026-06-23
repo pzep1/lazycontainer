@@ -44,6 +44,9 @@ type fakeClient struct {
 	registryLogin  string
 	registryUser   string
 	registryLogout string
+	builderStarted bool
+	builderStopped bool
+	builderDeleted bool
 	deleted        string
 	createdVolume  string
 	volumeSize     string
@@ -131,6 +134,20 @@ func (f *fakeClient) Registries(context.Context) ([]containercli.RegistryLogin, 
 		Username: "alice",
 		Scheme:   "https",
 	}}, nil
+}
+
+func (f *fakeClient) BuilderStatus(context.Context) (containercli.BuilderStatus, error) {
+	return containercli.BuilderStatus{
+		ID:         "buildkit",
+		StateValue: "running",
+		Present:    true,
+		Configuration: map[string]any{
+			"resources": map[string]any{
+				"cpus":          float64(4),
+				"memoryInBytes": float64(4294967296),
+			},
+		},
+	}, nil
 }
 
 func (f *fakeClient) Stats(context.Context, ...string) ([]containercli.Stat, error) {
@@ -258,6 +275,21 @@ func (f *fakeClient) LogoutRegistry(_ context.Context, registry string) error {
 	return nil
 }
 
+func (f *fakeClient) StartBuilder(context.Context) error {
+	f.builderStarted = true
+	return nil
+}
+
+func (f *fakeClient) StopBuilder(context.Context) error {
+	f.builderStopped = true
+	return nil
+}
+
+func (f *fakeClient) DeleteBuilder(context.Context, bool) error {
+	f.builderDeleted = true
+	return nil
+}
+
 func (f *fakeClient) Copy(_ context.Context, source string, destination string) error {
 	f.copySource = source
 	f.copyDest = destination
@@ -362,7 +394,7 @@ func TestModelLoadsSnapshotIntoView(t *testing.T) {
 	if !strings.Contains(view, "containers 1") {
 		t.Fatalf("view did not include container count:\n%s", view)
 	}
-	if !strings.Contains(view, "volumes 1") || !strings.Contains(view, "networks 1") || !strings.Contains(view, "machines 1") || !strings.Contains(view, "registries 1") {
+	if !strings.Contains(view, "builder 1") || !strings.Contains(view, "volumes 1") || !strings.Contains(view, "networks 1") || !strings.Contains(view, "machines 1") || !strings.Contains(view, "registries 1") {
 		t.Fatalf("view did not include secondary resource counts:\n%s", view)
 	}
 }
@@ -433,6 +465,62 @@ func TestImageDetailsShowLayerHistory(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view did not include %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestBuilderPaneShowsStatusAndLifecycleActions(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(msg)
+	updated = switchToBuilder(t, updated)
+
+	view := updated.View()
+	for _, want := range []string{"builder 1", "buildkit", "running", "CPUs:    4", "Memory:  4.0 GB"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view did not include %q:\n%s", want, view)
+		}
+	}
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if cmd == nil {
+		t.Fatalf("expected start builder command")
+	}
+	done := cmd().(actionDoneMsg)
+	updated, refresh := updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after start builder")
+	}
+	if !client.builderStarted {
+		t.Fatalf("expected builder start call")
+	}
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatalf("expected stop builder command")
+	}
+	done = cmd().(actionDoneMsg)
+	updated, refresh = updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after stop builder")
+	}
+	if !client.builderStopped {
+		t.Fatalf("expected builder stop call")
+	}
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	_, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected delete builder confirmation command")
+	}
+	done = cmd().(actionDoneMsg)
+	updated, refresh = updated.Update(done)
+	if refresh == nil {
+		t.Fatalf("expected refresh after delete builder")
+	}
+	if !client.builderDeleted {
+		t.Fatalf("expected builder delete call")
 	}
 }
 
@@ -1363,24 +1451,29 @@ func TestCreateNetworkPromptUsesNameAndOptionalSubnet(t *testing.T) {
 	}
 }
 
-func switchToVolumes(t *testing.T, model tea.Model) tea.Model {
+func switchToBuilder(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
 	return switchTabs(t, model, 2)
 }
 
-func switchToNetworks(t *testing.T, model tea.Model) tea.Model {
+func switchToVolumes(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
 	return switchTabs(t, model, 3)
 }
 
-func switchToMachines(t *testing.T, model tea.Model) tea.Model {
+func switchToNetworks(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
 	return switchTabs(t, model, 4)
 }
 
-func switchToRegistries(t *testing.T, model tea.Model) tea.Model {
+func switchToMachines(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
 	return switchTabs(t, model, 5)
+}
+
+func switchToRegistries(t *testing.T, model tea.Model) tea.Model {
+	t.Helper()
+	return switchTabs(t, model, 6)
 }
 
 func switchTabs(t *testing.T, model tea.Model, count int) tea.Model {

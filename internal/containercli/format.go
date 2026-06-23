@@ -407,6 +407,94 @@ func (r RegistryLogin) DetailLines() []string {
 	return lines
 }
 
+func (b BuilderStatus) Name() string {
+	if !b.Present {
+		return "builder"
+	}
+	return firstNonEmpty(
+		b.ID,
+		b.ContainerID,
+		b.NameValue,
+		stringFromMap(b.Raw, "id"),
+		stringFromMap(b.Raw, "containerID"),
+		stringFromMap(b.Raw, "containerId"),
+		stringFromMap(b.Raw, "name"),
+		b.Value,
+		"builder",
+	)
+}
+
+func (b BuilderStatus) State() string {
+	if !b.Present {
+		return "not created"
+	}
+	return firstNonEmpty(
+		b.StateValue,
+		b.StatusValue,
+		stringFromMap(b.Raw, "state"),
+		stringFromMap(b.Raw, "status"),
+		"unknown",
+	)
+}
+
+func (b BuilderStatus) CPUs() string {
+	if value, ok := numberFromMap(b.Configuration, "cpus"); ok {
+		return fmt.Sprintf("%.0f", value)
+	}
+	if value, ok := numberFromNestedMap(b.Configuration, "resources", "cpus"); ok {
+		return fmt.Sprintf("%.0f", value)
+	}
+	if value, ok := numberFromMap(b.Raw, "cpus"); ok {
+		return fmt.Sprintf("%.0f", value)
+	}
+	if value, ok := numberFromNestedMap(b.Raw, "resources", "cpus"); ok {
+		return fmt.Sprintf("%.0f", value)
+	}
+	return "-"
+}
+
+func (b BuilderStatus) Memory() string {
+	if value, ok := numberFromMap(b.Configuration, "memoryInBytes"); ok {
+		return FormatBytes(int64(value))
+	}
+	if value, ok := numberFromNestedMap(b.Configuration, "resources", "memoryInBytes"); ok {
+		return FormatBytes(int64(value))
+	}
+	if value, ok := numberFromMap(b.Raw, "memoryInBytes"); ok {
+		return FormatBytes(int64(value))
+	}
+	if value, ok := numberFromNestedMap(b.Raw, "resources", "memoryInBytes"); ok {
+		return FormatBytes(int64(value))
+	}
+	return "-"
+}
+
+func (b BuilderStatus) DetailLines() []string {
+	lines := []string{
+		"Builder",
+		"  ID:      " + emptyDash(b.Name()),
+		"  State:   " + b.State(),
+		"  CPUs:    " + b.CPUs(),
+		"  Memory:  " + b.Memory(),
+	}
+	if !b.Present {
+		return append(lines, "", "No builder container is present.")
+	}
+	if len(b.Configuration) > 0 {
+		lines = append(lines, "", "Configuration")
+		for _, entry := range sortedMapLines(b.Configuration) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	if len(b.Raw) > 0 {
+		lines = append(lines, "", "Raw")
+		for _, entry := range sortedMapLines(b.Raw) {
+			lines = append(lines, "  "+entry)
+		}
+	}
+	return lines
+}
+
 func (s Stat) SummaryLines() []string {
 	lines := []string{}
 	if cpuPercent, ok := firstNumberFromMap(s, "cpuPercent", "cpuPercentage", "cpuPercentUsage"); ok {

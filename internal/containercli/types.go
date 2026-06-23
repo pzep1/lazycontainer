@@ -1,6 +1,9 @@
 package containercli
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 type SystemStatus struct {
 	APIServerAppName string `json:"apiServerAppName"`
@@ -219,6 +222,53 @@ func (r *RegistryLogin) UnmarshalJSON(data []byte) error {
 	}
 	*r = RegistryLogin(alias)
 	return json.Unmarshal(data, &r.Raw)
+}
+
+type BuilderStatus struct {
+	ID            string         `json:"id"`
+	ContainerID   string         `json:"containerID"`
+	NameValue     string         `json:"name"`
+	StateValue    string         `json:"state"`
+	StatusValue   string         `json:"status"`
+	Configuration map[string]any `json:"configuration"`
+	Raw           map[string]any `json:"-"`
+	Value         string         `json:"-"`
+	Present       bool           `json:"-"`
+}
+
+func (b *BuilderStatus) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*b = BuilderStatus{}
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var entries []json.RawMessage
+		if err := json.Unmarshal(trimmed, &entries); err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			*b = BuilderStatus{}
+			return nil
+		}
+		return b.UnmarshalJSON(entries[0])
+	}
+
+	var value string
+	if err := json.Unmarshal(trimmed, &value); err == nil {
+		b.Value = value
+		b.Present = value != ""
+		return nil
+	}
+
+	type builderStatusAlias BuilderStatus
+	var alias builderStatusAlias
+	if err := json.Unmarshal(trimmed, &alias); err != nil {
+		return err
+	}
+	*b = BuilderStatus(alias)
+	b.Present = true
+	return json.Unmarshal(trimmed, &b.Raw)
 }
 
 type Stat map[string]any
