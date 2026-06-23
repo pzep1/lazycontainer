@@ -168,3 +168,20 @@ func TestNetworksParsesAppleJSONShape(t *testing.T) {
 		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, runner.args)
 	}
 }
+
+func TestShellCommandUsesInteractiveTTYExec(t *testing.T) {
+	client := &Client{Binary: "container"}
+
+	cmd, err := client.ShellCommand("db", "/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs := []string{"exec", "--interactive", "--tty", "db", "/bin/sh"}
+	if cmd.Args[0] != "container" {
+		t.Fatalf("expected container binary, got %q", cmd.Args[0])
+	}
+	if !reflect.DeepEqual(cmd.Args[1:], wantArgs) {
+		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", wantArgs, cmd.Args[1:])
+	}
+}

@@ -121,6 +121,16 @@ func (c *Client) InspectNetwork(ctx context.Context, network string) (string, er
 	return string(output), err
 }
 
+func (c *Client) ShellCommand(id string, shell string) (*exec.Cmd, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, errors.New("container id is required")
+	}
+	if strings.TrimSpace(shell) == "" {
+		shell = "/bin/sh"
+	}
+	return exec.Command(c.binaryName(), "exec", "--interactive", "--tty", id, shell), nil
+}
+
 func (c *Client) Start(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "start", id)
 	return err
@@ -197,17 +207,20 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
 	if c.Runner == nil {
 		c.Runner = ExecRunner{}
 	}
-	binary := c.Binary
-	if binary == "" {
-		binary = "container"
-	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return c.Runner.Run(runCtx, binary, args...)
+	return c.Runner.Run(runCtx, c.binaryName(), args...)
+}
+
+func (c *Client) binaryName() string {
+	if c.Binary == "" {
+		return "container"
+	}
+	return c.Binary
 }
 
 func decodeJSON(output []byte, target any) error {

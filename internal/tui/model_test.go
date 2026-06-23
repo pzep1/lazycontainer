@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -96,6 +97,10 @@ func (f *fakeClient) InspectNetwork(context.Context, string) (string, error) {
 	return `[{"id":"default"}]`, nil
 }
 
+func (f *fakeClient) ShellCommand(string, string) (*exec.Cmd, error) {
+	return exec.Command("true"), nil
+}
+
 func (f *fakeClient) Start(_ context.Context, id string) error {
 	f.started = id
 	return nil
@@ -180,5 +185,20 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 
 	if client.deleted != "db" {
 		t.Fatalf("expected confirmed delete for db, got %q", client.deleted)
+	}
+}
+
+func TestShellRequiresRunningContainer(t *testing.T) {
+	model := New(&fakeClient{})
+	msg := model.Init()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	updated, _ = updated.Update(msg)
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if cmd != nil {
+		t.Fatalf("expected no shell command for stopped container")
+	}
+	view := updated.View()
+	if !strings.Contains(view, "start db before opening a shell") {
+		t.Fatalf("view did not explain shell guard:\n%s", view)
 	}
 }

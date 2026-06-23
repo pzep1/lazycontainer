@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type Client interface {
 	InspectImage(context.Context, string) (string, error)
 	InspectVolume(context.Context, string) (string, error)
 	InspectNetwork(context.Context, string) (string, error)
+	ShellCommand(string, string) (*exec.Cmd, error)
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 	Kill(context.Context, string) error
@@ -128,6 +130,11 @@ type actionDoneMsg struct {
 	err     error
 }
 
+type shellFinishedMsg struct {
+	id  string
+	err error
+}
+
 func New(client Client) Model {
 	return Model{
 		client:     client,
@@ -189,6 +196,15 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusLine = msg.message
 		return m, m.refreshCmd()
+	case shellFinishedMsg:
+		m.busy = ""
+		m.err = msg.err
+		if msg.err != nil {
+			m.statusLine = msg.err.Error()
+			return m, nil
+		}
+		m.statusLine = "shell exited " + msg.id
+		return m, m.refreshCmd()
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -237,6 +253,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.inspectSelected()
 	case "l":
 		return m.logsSelected()
+	case "e":
+		return m.shellSelected()
 	case "s":
 		return m.lifecycleSelected("starting", "started", func(ctx context.Context, id string) error {
 			return m.client.Start(ctx, id)
@@ -404,6 +422,32 @@ func (m Model) logsSelected() (tea.Model, tea.Cmd) {
 		}
 		return outputMsg{title: "Logs " + id, body: body, err: err}
 	}
+}
+
+func (m Model) shellSelected() (tea.Model, tea.Cmd) {
+	if m.active != resourceContainers {
+		return m, nil
+	}
+	container, ok := m.selectedContainer()
+	if !ok {
+		return m, nil
+	}
+	id := container.Name()
+	if container.State() != "running" {
+		m.statusLine = "start " + id + " before opening a shell"
+		return m, nil
+	}
+	cmd, err := m.client.ShellCommand(id, "/bin/sh")
+	if err != nil {
+		m.err = err
+		m.statusLine = err.Error()
+		return m, nil
+	}
+	m.busy = "shell " + id
+	m.statusLine = "opening shell " + id
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return shellFinishedMsg{id: id, err: err}
+	})
 }
 
 func (m Model) lifecycleSelected(busy string, done string, action func(context.Context, string) error) (tea.Model, tea.Cmd) {
@@ -661,7 +705,7 @@ func (m Model) renderFooter() string {
 		return topStyle.Width(m.width).Foreground(colorYellow).Render(m.confirm.label + "  y/enter confirm, n/esc cancel")
 	}
 	if m.showHelp {
-		help := "tab switch | r refresh | i inspect | l logs | s start | x stop | K kill | d delete | p prune | pgup/pgdown scroll | q quit"
+		help := "tab switch | r refresh | i inspect | l logs | e shell | s start | x stop | K kill | d delete | p prune | pgup/pgdown scroll | q quit"
 		return footerStyle.Width(m.width).Render(truncate(help, m.width-2))
 	}
 	status := m.statusLine

@@ -39,6 +39,7 @@ go build -o bin/lazycont ./cmd/lazycont
 | `r` | Refresh lists and status |
 | `i` / `enter` | Inspect selected resource |
 | `l` | Tail selected container logs |
+| `e` | Open `/bin/sh` in the selected running container |
 | `s` | Start selected container |
 | `x` | Stop selected container |
 | `K` | Kill selected container |
