@@ -1,6 +1,6 @@
 <div align="center">
 
-# lazycont
+# lazycontainer
 
 **A lazydocker-style terminal UI for Apple's [`container`](https://github.com/apple/container) CLI.**
 
@@ -8,6 +8,7 @@ Browse, inspect, and drive your containers, images, volumes, networks, machines,
 
 ### `brew install pzep1/lazycont/lazycontainer`
 
+![Release](https://img.shields.io/github/v/release/pzep1/lazycontainer)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS%20(Apple%20silicon)-lightgrey)
 ![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)
@@ -84,7 +85,7 @@ Requires macOS with Apple's [`container`](https://github.com/apple/container) CL
 
 ## More ways to run
 
-The Homebrew formula taps `pzep1/homebrew-lazycont` and builds lazycontainer from the latest tagged release.
+The Homebrew formula taps [`pzep1/homebrew-lazycont`](https://github.com/pzep1/homebrew-lazycont) and builds **lazycontainer v0.3.0** from the latest tagged release.
 
 Or run from source (needs Go 1.26+ to match `go.mod`):
 

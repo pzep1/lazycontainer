@@ -55,7 +55,6 @@ var ContainerContexts = []string{
 	"containers", "images", "volumes", "networks", "machines", "registries", "builder", "system",
 }
 
-
 func LoadDefault() (Config, string, error) {
 	path, err := DefaultPath()
 	if err != nil {

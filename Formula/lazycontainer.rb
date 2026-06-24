@@ -1,10 +1,10 @@
 class Lazycontainer < Formula
   desc "Lazydocker-style terminal UI for Apple's container CLI"
-  homepage "https://github.com/pzep1/lazycont"
-  url "https://github.com/pzep1/lazycont/archive/refs/tags/v0.3.0.tar.gz"
-  sha256 "d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed"
+  homepage "https://github.com/pzep1/lazycontainer"
+  url "https://github.com/pzep1/lazycontainer/archive/refs/tags/v0.3.0.tar.gz"
+  sha256 "90e5a7d99334e94bab1e1730ada6e10ac66505055d2d9eb6c8ea6ca898b90a91"
   license "GPL-3.0-or-later"
-  head "https://github.com/pzep1/lazycont.git", branch: "main"
+  head "https://github.com/pzep1/lazycontainer.git", branch: "main"
 
   depends_on "go" => :build
   depends_on "container"
