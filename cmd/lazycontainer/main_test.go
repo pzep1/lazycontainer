@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pzep1/lazycont/internal/appmeta"
 	appconfig "github.com/pzep1/lazycont/internal/config"
 	"github.com/pzep1/lazycont/internal/tui"
 )
@@ -21,7 +22,7 @@ func TestRunPrintsVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run returned %d, want 0", code)
 	}
-	if got, want := strings.TrimSpace(stdout.String()), "lazycont dev"; got != want {
+	if got, want := strings.TrimSpace(stdout.String()), appmeta.Name+" dev"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if stderr.Len() != 0 {
@@ -81,8 +82,8 @@ func TestRunRejectsTrailingArgument(t *testing.T) {
 }
 
 func TestConfigWarningIncludesPathWhenAvailable(t *testing.T) {
-	got := configWarning("/tmp/lazycont/config.json", errors.New("bad json"))
-	want := "config /tmp/lazycont/config.json: bad json"
+	got := configWarning("/tmp/lazycontainer/config.json", errors.New("bad json"))
+	want := "config /tmp/lazycontainer/config.json: bad json"
 	if got != want {
 		t.Fatalf("configWarning = %q, want %q", got, want)
 	}
@@ -146,21 +147,21 @@ func TestApplyConfigToOptionsMapsGUIAndLogs(t *testing.T) {
 }
 
 func TestEditorCommandAppendsConfigPath(t *testing.T) {
-	cmd, err := editorCommand("code --wait", "/tmp/lazycont/config.json")
+	cmd, err := editorCommand("code --wait", "/tmp/lazycontainer/config.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Path != "code" {
 		t.Fatalf("Path = %q, want code", cmd.Path)
 	}
-	wantArgs := []string{"code", "--wait", "/tmp/lazycont/config.json"}
+	wantArgs := []string{"code", "--wait", "/tmp/lazycontainer/config.json"}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("Args mismatch\nwant: %#v\n got: %#v", wantArgs, cmd.Args)
 	}
 }
 
 func TestEditorCommandRequiresEditor(t *testing.T) {
-	if _, err := editorCommand(" ", "/tmp/lazycont/config.json"); err == nil || !strings.Contains(err.Error(), "editor is required") {
+	if _, err := editorCommand(" ", "/tmp/lazycontainer/config.json"); err == nil || !strings.Contains(err.Error(), "editor is required") {
 		t.Fatalf("err = %v, want editor validation error", err)
 	}
 }

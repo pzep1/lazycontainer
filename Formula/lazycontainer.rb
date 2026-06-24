@@ -1,8 +1,6 @@
-class Lazycont < Formula
+class Lazycontainer < Formula
   desc "Lazydocker-style terminal UI for Apple's container CLI"
   homepage "https://github.com/pzep1/lazycont"
-  url "https://github.com/pzep1/lazycont/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "59aa85e1ecca349f031bb73cb02e7619a4c0bcd6f0cc3724d05444d9be351ca6"
   license "GPL-3.0-or-later"
   head "https://github.com/pzep1/lazycont.git", branch: "main"
 
@@ -16,12 +14,12 @@ class Lazycont < Formula
 
     system "go", "build",
       *std_go_args(ldflags: "-s -w -X main.version=#{build_version}"),
-      "./cmd/lazycont"
+      "./cmd/lazycontainer"
   end
 
   def caveats
     <<~EOS
-      lazycont drives Apple's container CLI. Homebrew installs it as a
+      lazycontainer drives Apple's container CLI. Homebrew installs it as a
       dependency, but you still need to start its system service before
       launching the TUI:
 
@@ -34,7 +32,7 @@ class Lazycont < Formula
   end
 
   test do
-    assert_match "lazycont", shell_output("#{bin}/lazycont --version")
-    assert_match "Usage:", shell_output("#{bin}/lazycont --help")
+    assert_match "lazycontainer", shell_output("#{bin}/lazycontainer --version")
+    assert_match "Usage:", shell_output("#{bin}/lazycontainer --help")
   end
 end

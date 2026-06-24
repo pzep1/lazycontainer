@@ -17,7 +17,7 @@ A clear description of the bug.
 What you expected to happen.
 
 **Environment**
-- lazycont version (`lazycont --version`):
+- lazycontainer version (`lazycontainer --version`):
 - macOS version:
 - `container --version`:
 

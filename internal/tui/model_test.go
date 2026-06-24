@@ -1416,7 +1416,7 @@ func TestOpenConfigUsesConfiguredEditorCommand(t *testing.T) {
 	client := &fakeClient{}
 	var openedPath string
 	model := NewWithOptions(client, Options{
-		ConfigPath: "/tmp/lazycont/config.json",
+		ConfigPath: "/tmp/lazycontainer/config.json",
 		OpenConfigCommand: func(path string) (*exec.Cmd, error) {
 			openedPath = path
 			return exec.Command("true"), nil
@@ -1433,7 +1433,7 @@ func TestOpenConfigUsesConfiguredEditorCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected config editor command")
 	}
-	if openedPath != "/tmp/lazycont/config.json" {
+	if openedPath != "/tmp/lazycontainer/config.json" {
 		t.Fatalf("opened path = %q", openedPath)
 	}
 	if updated.(Model).busy != "editing config" {
@@ -1443,12 +1443,12 @@ func TestOpenConfigUsesConfiguredEditorCommand(t *testing.T) {
 		t.Fatalf("statusLine = %q", updated.(Model).statusLine)
 	}
 
-	updated, cmd = updated.Update(configEditedMsg{path: "/tmp/lazycont/config.json"})
+	updated, cmd = updated.Update(configEditedMsg{path: "/tmp/lazycontainer/config.json"})
 	if cmd != nil {
 		t.Fatalf("expected no command after config reload")
 	}
 	state := updated.(Model)
-	if state.statusLine != "edited config /tmp/lazycont/config.json" {
+	if state.statusLine != "edited config /tmp/lazycontainer/config.json" {
 		t.Fatalf("statusLine = %q", state.statusLine)
 	}
 	if len(state.customCommands) != 1 || state.customCommands[0].Name != "Images" {
@@ -1458,7 +1458,7 @@ func TestOpenConfigUsesConfiguredEditorCommand(t *testing.T) {
 
 func TestOpenConfigRequiresEditorCommand(t *testing.T) {
 	client := &fakeClient{}
-	model := NewWithOptions(client, Options{ConfigPath: "/tmp/lazycont/config.json"})
+	model := NewWithOptions(client, Options{ConfigPath: "/tmp/lazycontainer/config.json"})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd != nil {

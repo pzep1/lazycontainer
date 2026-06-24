@@ -50,19 +50,11 @@ const Starter = `{
 }
 `
 
-// ContainerContexts enumerates the customCommands contexts that map to
-// lazycont resource panes.
+// ContainerContexts enumerates the customCommands contexts that map to resource panes.
 var ContainerContexts = []string{
 	"containers", "images", "volumes", "networks", "machines", "registries", "builder", "system",
 }
 
-func DefaultPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "lazycont", "config.json"), nil
-}
 
 func LoadDefault() (Config, string, error) {
 	path, err := DefaultPath()

@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/pzep1/lazycont/internal/appmeta"
 	appconfig "github.com/pzep1/lazycont/internal/config"
 	"github.com/pzep1/lazycont/internal/containercli"
 	"github.com/pzep1/lazycont/internal/tui"
@@ -25,7 +26,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		if len(args) > 1 {
-			fmt.Fprintf(stderr, "lazycont: unexpected argument %q\n", args[1])
+			fmt.Fprintf(stderr, "%s: unexpected argument %q\n", appmeta.Name, args[1])
 			printUsage(stderr)
 			return 2
 		}
@@ -35,10 +36,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			printUsage(stdout)
 			return 0
 		case "--version", "-v", "version":
-			fmt.Fprintf(stdout, "lazycont %s\n", version)
+			fmt.Fprintf(stdout, "%s %s\n", appmeta.Name, version)
 			return 0
 		default:
-			fmt.Fprintf(stderr, "lazycont: unexpected argument %q\n", args[0])
+			fmt.Fprintf(stderr, "%s: unexpected argument %q\n", appmeta.Name, args[0])
 			printUsage(stderr)
 			return 2
 		}
@@ -48,15 +49,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `lazycont - terminal UI for Apple's container CLI
+	fmt.Fprintf(w, `%s - terminal UI for Apple's container CLI
 
 Usage:
-  lazycont [--help] [--version]
+  %s [--help] [--version]
 
 Options:
   --help     Show this help.
-  --version  Print the lazycont version.
-`)
+  --version  Print the %s version.
+`, appmeta.Name, appmeta.Name, appmeta.Name)
 }
 
 func runTUI(stderr io.Writer) int {
@@ -76,7 +77,7 @@ func runTUI(stderr io.Writer) int {
 	opts.OpenLinkCommand = openLinkCommand
 	program := tea.NewProgram(tui.NewWithOptions(client, opts), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := program.Run(); err != nil {
-		fmt.Fprintf(stderr, "lazycont: %v\n", err)
+		fmt.Fprintf(stderr, "%s: %v\n", appmeta.Name, err)
 		return 1
 	}
 	return 0

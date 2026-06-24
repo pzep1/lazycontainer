@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/pzep1/lazycont/internal/appmeta"
 	"github.com/pzep1/lazycont/internal/containercli"
 )
 
@@ -2572,10 +2573,10 @@ func clamp(value int, min int, max int) int {
 
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
-		return "lazycont"
+		return appmeta.Name
 	}
 	if m.height < 8 || m.width < 60 {
-		return "lazycont needs a terminal of at least 60x8"
+		return appmeta.Name + " needs a terminal of at least 60x8"
 	}
 	if m.showHelp {
 		return m.renderHelpOverlay()
@@ -2750,7 +2751,7 @@ func (m Model) renderTopBar() string {
 	if status == "" {
 		status = "unknown"
 	}
-	left := fmt.Sprintf("lazycont | apple container: %s", status)
+	left := fmt.Sprintf("%s | apple container: %s", appmeta.Name, status)
 	if m.busy != "" {
 		left += " | " + m.busy
 	}

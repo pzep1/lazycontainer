@@ -12,8 +12,8 @@ CLI. You need:
 - Go matching `go.mod` (1.26+) to build and test.
 
 ```sh
-go run ./cmd/lazycont                      # run the TUI
-go build -o bin/lazycont ./cmd/lazycont    # build a binary
+go run ./cmd/lazycontainer                      # run the TUI
+go build -o bin/lazycontainer ./cmd/lazycontainer    # build a binary
 ```
 
 ## Before you open a pull request

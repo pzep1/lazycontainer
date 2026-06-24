@@ -104,7 +104,7 @@ func TestLoadRejectsTrailingJSONData(t *testing.T) {
 }
 
 func TestEnsureCreatesStarterConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "lazycont", "config.json")
+	path := filepath.Join(t.TempDir(), "lazycontainer", "config.json")
 
 	if err := Ensure(path); err != nil {
 		t.Fatal(err)

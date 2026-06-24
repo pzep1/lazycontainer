@@ -5,6 +5,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/pzep1/lazycont/internal/appmeta"
 )
 
 // helpLines returns the grouped keybinding reference shown in the help overlay.
@@ -119,7 +121,7 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderHelpOverlay() string {
-	top := topStyle.Width(m.width).Render("lazycont help — keybindings")
+	top := topStyle.Width(m.width).Render(appmeta.Name + " help — keybindings")
 	footer := footerStyle.Width(m.width).Render("↑/↓ scroll · ? or esc to close")
 	bodyHeight := m.height - lipgloss.Height(top) - lipgloss.Height(footer)
 	if bodyHeight < 1 {

@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to lazycont! -->
+<!-- Thanks for contributing to lazycontainer! -->
 
 ## Summary
 

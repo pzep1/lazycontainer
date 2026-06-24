@@ -6,7 +6,7 @@
 
 Browse, inspect, and drive your containers, images, volumes, networks, machines, registries, and the builder — all from one fast, keyboard-driven TUI.
 
-### `brew install pzep1/lazycont/lazycont`
+### `brew install pzep1/lazycont/lazycontainer`
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS%20(Apple%20silicon)-lightgrey)
@@ -18,13 +18,13 @@ Browse, inspect, and drive your containers, images, volumes, networks, machines,
 ## Install
 
 ```sh
-brew install pzep1/lazycont/lazycont
+brew install pzep1/lazycont/lazycontainer
 ```
 
 Requires macOS with Apple's [`container`](https://github.com/apple/container) CLI installed and its system service started. [Other ways to run ↓](#more-ways-to-run)
 
 ```text
-┌ lazycont | apple container: running ──────────────────── updated 16:57:03 ┐
+┌ lazycontainer | apple container: running ──────────────────── updated 16:57:03 ┐
 │ ┌─────────────────────────────┐┌──────────────────────────────────────┐  │
 │ │  containers 3   images 6     ││ Logs  Stats  Env  Config  Top  Inspect│  │
 │ │  volumes 2   networks 1  …   ││                                       │  │
@@ -62,7 +62,7 @@ Requires macOS with Apple's [`container`](https://github.com/apple/container) CL
 - inspect selected resources (raw JSON)
 - scan container CPU and memory directly in the container list
 - run ad-hoc or named custom Apple `container` commands without leaving the TUI
-- open the lazycont config file from the TUI (changes reload live)
+- open the lazycontainer config file from the TUI (changes reload live)
 - view image variant and layer history
 - run one-off commands in selected running containers
 - export a selected container filesystem as a tar archive
@@ -84,17 +84,13 @@ Requires macOS with Apple's [`container`](https://github.com/apple/container) CL
 
 ## More ways to run
 
-The Homebrew formula taps `pzep1/homebrew-lazycont` and builds lazycont from the latest tagged release. To track the development branch instead:
-
-```sh
-brew install --HEAD pzep1/lazycont/lazycont
-```
+The Homebrew formula taps `pzep1/homebrew-lazycont` and builds lazycontainer from the latest tagged release.
 
 Or run from source (needs Go 1.26+ to match `go.mod`):
 
 ```sh
-go run ./cmd/lazycont                      # run directly
-go build -o bin/lazycont ./cmd/lazycont    # or build a local binary
+go run ./cmd/lazycontainer                      # run directly
+go build -o bin/lazycontainer ./cmd/lazycontainer    # or build a local binary
 ```
 
 The formula depends on Homebrew's Apple `container` package. See [docs/homebrew.md](docs/homebrew.md) for tap maintenance and release steps.
@@ -166,7 +162,7 @@ Press `?` in the app for the same reference, scrollable. Press `space` for a men
 
 ## Config
 
-lazycont reads optional settings from `~/Library/Application Support/lazycont/config.json` on macOS. Everything is optional — the simplest config just adds custom commands:
+lazycontainer reads optional settings from `~/Library/Application Support/lazycontainer/config.json` on macOS. An existing config under `~/Library/Application Support/lazycont/` is still picked up until you create one in the new directory. Everything is optional — the simplest config just adds custom commands:
 
 ```json
 {
