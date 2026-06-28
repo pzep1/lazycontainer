@@ -37,7 +37,7 @@ func TestStatSummaryLinesFormatsAppleStatsShape(t *testing.T) {
 	got := stat.SummaryLines()
 	want := []string{
 		"  CPU time: 1.2s",
-		"  Memory:   45.2 MB / 1.0 GB  [#---------------] 4.4%",
+		"  Memory:   45.2 MB / 1.0 GB  [#---------------]   4.4%",
 		"  Network:  1.2 MB rx / 856.0 KB tx",
 		"  Block IO: 4.5 MB read / 2.1 MB write",
 		"  PIDs:     3",
@@ -74,7 +74,7 @@ func TestStatListSummaryFormatsCompactCPUAndMemory(t *testing.T) {
 		"memoryLimitBytes": float64(1073741824),
 	}
 
-	if got, want := stat.ListSummary(), "12.3% cpu  4.4% mem"; got != want {
+	if got, want := stat.ListSummary(), " 12.3% cpu    4.4% mem"; got != want {
 		t.Fatalf("list summary = %q, want %q", got, want)
 	}
 }
@@ -85,7 +85,7 @@ func TestStatListSummaryShowsMemoryBytesWithoutLimit(t *testing.T) {
 		"memoryUsageBytes": float64(47431680),
 	}
 
-	if got, want := stat.ListSummary(), "45.2 MB mem"; got != want {
+	if got, want := stat.ListSummary(), "  45.2 MB mem"; got != want {
 		t.Fatalf("list summary = %q, want %q", got, want)
 	}
 }

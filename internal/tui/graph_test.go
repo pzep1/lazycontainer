@@ -34,8 +34,13 @@ func TestGraphSectionRendersHeaderAndAxis(t *testing.T) {
 }
 
 func TestGraphSectionNeedsTwoSamples(t *testing.T) {
+	// Before enough samples arrive the block still reserves its full height so
+	// the layout doesn't jump once the graph appears.
 	lines := graphSection("CPU %", []float64{42}, 40, 5, 100, formatPercentValue)
-	if len(lines) != 1 || !strings.Contains(lines[0], "collecting") {
-		t.Fatalf("expected single collecting line, got %v", lines)
+	if len(lines) != 6 {
+		t.Fatalf("expected header + 5 reserved rows, got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "collecting") {
+		t.Fatalf("expected collecting caption, got %q", lines[0])
 	}
 }

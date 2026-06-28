@@ -610,7 +610,7 @@ func (s Stat) ListSummary() string {
 	case hasMemoryUsage && hasMemoryLimit && memoryLimit > 0:
 		parts = append(parts, formatPercent(memoryUsage/memoryLimit*100)+" mem")
 	case hasMemoryUsage:
-		parts = append(parts, FormatBytes(int64(memoryUsage))+" mem")
+		parts = append(parts, FormatBytesField(int64(memoryUsage))+" mem")
 	}
 	return strings.Join(parts, "  ")
 }
@@ -707,8 +707,17 @@ func boolLabel(value bool) string {
 	return "no"
 }
 
+// formatPercent renders a percentage at a fixed six-column width ("  0.0%" …
+// "100.0%") so values stay put as they gain or lose digits between refreshes.
 func formatPercent(value float64) string {
-	return fmt.Sprintf("%.1f%%", value)
+	return fmt.Sprintf("%5.1f%%", value)
+}
+
+// FormatBytesField renders a byte size right-aligned in a fixed-width field so
+// columns that show live sizes don't jitter as the value crosses unit
+// boundaries (e.g. "1023.9 MB" → "1.0 GB").
+func FormatBytesField(bytes int64) string {
+	return fmt.Sprintf("%9s", FormatBytes(bytes))
 }
 
 func formatUsec(value float64) string {

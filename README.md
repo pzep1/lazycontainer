@@ -27,30 +27,35 @@ Requires macOS with Apple's [`container`](https://github.com/apple/container) CL
 ```text
  lazycontainer  ● running                                        updated 16:57:03
 ╭──────────────────────────────╮╭─────────────────────────────────────────────╮
-│ ▌ Containers (3)             ││ Logs  Stats  Env  Config  Top  Inspect       │
-│ name           state/cpu/mem ││                                              │
-│ web      running  2.1%  45MB ││ 12:07:01 server listening on :8080           │
-│ db       running  0.4%  60MB ││ 12:07:04 GET /   200  1ms                     │
-│ cache    stopped          -  ││ 12:07:06 GET /api 200 12ms                   │
-│   Images (6)                 ││ ▏following live — End re-attaches            │
-│   Builder (running)          ││                                              │
-│   Volumes (2)                ││                                              │
-│   Networks (1)               ││                                              │
-│   Machines (1)               ││                                              │
-│   Registries (1)             ││                                              │
-│   System (running)           ││                                              │
+│ ▌ Containers (3)  state/cpu/mem ││ Logs  Stats  Env  Config  Top  Inspect     │
+│ web       running  2.1%   45MB ││ 12:07:01 server listening on :8080          │
+│ db        running  0.4%   60MB ││ 12:07:04 GET /   200  1ms                    │
+│ cache     stopped         -    ││ 12:07:06 GET /api 200 12ms                  │
+│   Images (6)              size ││ ▏following live — End re-attaches            │
+│ nginx              1.8.2  142M ││                                             │
+│ postgres           16     438M ││                                             │
+│   Builder (running)     state ││                                              │
+│   Volumes (2)            size ││                                              │
+│ pgdata             local  1.2G ││                                             │
+│   Networks (1)          mode ││                                               │
+│   Machines (1)          state ││                                              │
+│   System (running)    status ││                                               │
 ╰──────────────────────────────╯╰─────────────────────────────────────────────╯
  refreshed · u auto:on            space menu · ? help · q quit · s start · l logs
 ```
 
-Resources stack as focusable panels down the left, lazydocker-style: the focused
-one expands to show its list (`tab` / `shift+tab` to move between them), while the
-main panel on the right tracks the selected item.
+Every resource stacks as a panel down the left, lazydocker-style, and they are
+**all visible at once** — no accordion. The focused panel gets the accent bar,
+the largest share of vertical space, and the action keys; `tab` / `shift+tab` (or
+`1`–`8`) move focus between panels, while the main panel on the right tracks the
+selected item.
 
 ## Highlights
 
 - ⚡ **Live everything** — stream container, machine, and system logs in-pane with autoscroll, watch **CPU% and memory as live ASCII graphs**, and auto-refresh lists, stats, and status.
-- 🗂️ **Tabbed main panel** — flip a selected container between **Logs · Stats · Env · Config · Top · Inspect** with `[` / `]`; other resources get the tabs that fit them.
+- 🗂️ **Tabbed main panel** — flip a selected container between **Config · Logs · Stats · Env · Ports · Mounts · Health · Top · Inspect** with `[` / `]`; other resources get the tabs that fit them.
+- 📊 **Fleet overview strip** — a pinned summary line shows container counts, mean CPU%, memory in use, disk used/reclaimable, and builder state at a glance.
+- 🔗 **In-use badges** — images, volumes, and networks show a **●N** count of how many containers reference them, so you can see what's safe to prune.
 - ⌨️ **Drive it from the keyboard** — start/stop/restart/kill containers, exec shells, copy & export filesystems, pull/build/tag/push/save/load images, and manage volumes, networks, machines, registries, and the builder.
 - 🧭 **Discoverable** — a context-aware **actions menu** (`space`), a scrollable **keybinding reference** (`?`), and **screen modes** (`+` / `_`: normal → half → fullscreen).
 - 🎨 **Yours to shape** — custom commands (flat or per-context, with interactive `attach`), theme/border/layout, log window, and refresh interval — all reloaded live when you edit the config.
@@ -113,6 +118,8 @@ Press `?` in the app for the same reference, scrollable. Press `space` for a men
 | Key | Action |
 | --- | --- |
 | `tab` / `shift+tab` | Switch resource pane (containers, images, builder, volumes, networks, machines, registries, system) |
+| `←` / `→` or `h` / `tab` | Previous / next resource pane |
+| `1`–`8` | Jump to resource pane (1=containers … 8=system) |
 | `[` / `]` | Previous / next main-panel tab |
 | `+` / `_` | Cycle screen mode: normal, half, fullscreen |
 | `space` | Open the context-aware actions menu |

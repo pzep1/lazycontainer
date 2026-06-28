@@ -52,6 +52,32 @@ func TestActionsMenuOpensAndDispatchesSelection(t *testing.T) {
 	}
 }
 
+func TestActionsMenuShortcutKeyDispatches(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+		},
+	})
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	state := updated.(Model)
+	if state.menu == nil {
+		t.Fatalf("expected actions menu to open")
+	}
+
+	updated, cmd := state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	state = updated.(Model)
+	if state.menu != nil {
+		t.Fatalf("expected menu to close after shortcut key")
+	}
+	if cmd == nil {
+		t.Fatalf("expected stop command from menu shortcut x")
+	}
+}
+
 func TestActionsMenuEscCloses(t *testing.T) {
 	model := New(&fakeClient{})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})

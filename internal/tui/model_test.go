@@ -549,6 +549,39 @@ func TestMouseClickSelectsResourceTab(t *testing.T) {
 	}
 }
 
+func TestNumberKeyFocusesResourceSection(t *testing.T) {
+	model := New(&fakeClient{})
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+	updated, _ = updated.Update(msg)
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	if cmd != nil {
+		t.Fatalf("expected no command")
+	}
+	state := updated.(Model)
+	if state.active != resourceVolumes {
+		t.Fatalf("active resource mismatch: got %v want volumes", state.active)
+	}
+	if !strings.Contains(state.View(), "▌ Volumes") {
+		t.Fatalf("view did not focus volumes section:\n%s", state.View())
+	}
+}
+
+func TestCompactSidebarShowsListAtShortHeight(t *testing.T) {
+	model := New(&fakeClient{})
+	msg := model.refreshCmd()().(snapshotMsg)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 12})
+	updated, _ = updated.Update(msg)
+
+	view := updated.View()
+	for _, want := range []string{"▌ Containers", "db"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view did not include %q at short height:\n%s", want, view)
+		}
+	}
+}
+
 func TestMouseWheelScrollsPanel(t *testing.T) {
 	model := New(&fakeClient{})
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 16})
