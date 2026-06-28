@@ -157,7 +157,24 @@ func (m Model) handleMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menu = nil
 		return m.handleKey(keyMsgFor(item.key))
 	}
+	if item, ok := m.menuItemForKey(msg); ok {
+		m.menu = nil
+		return m.handleKey(keyMsgFor(item.key))
+	}
 	return m, nil
+}
+
+func (m Model) menuItemForKey(msg tea.KeyMsg) (menuItem, bool) {
+	if m.menu == nil {
+		return menuItem{}, false
+	}
+	key := msg.String()
+	for _, item := range m.menu.items {
+		if item.key == key {
+			return item, true
+		}
+	}
+	return menuItem{}, false
 }
 
 func (m Model) renderMenuOverlay() string {
@@ -169,7 +186,7 @@ func (m Model) renderMenuOverlay() string {
 		width = m.width - 4
 	}
 	lines := make([]string, 0, len(m.menu.items)+1)
-	lines = append(lines, mutedStyle.Render("↑/↓ move · enter select · esc close"))
+	lines = append(lines, mutedStyle.Render("↑/↓ move · enter or key · esc close"))
 	for i, item := range m.menu.items {
 		key := item.key
 		row := padRight(key, 7) + item.label

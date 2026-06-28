@@ -26,7 +26,7 @@ type tabFetchedMsg struct {
 func tabsFor(kind resourceKind) []mainTab {
 	switch kind {
 	case resourceContainers:
-		return []mainTab{tabConfig, tabLogs, tabStats, tabEnv, tabTop, tabInspect}
+		return []mainTab{tabConfig, tabLogs, tabStats, tabEnv, tabPorts, tabMounts, tabHealth, tabTop, tabInspect}
 	case resourceImages, resourceVolumes, resourceNetworks:
 		return []mainTab{tabConfig, tabInspect}
 	case resourceMachines:
@@ -48,6 +48,12 @@ func (t mainTab) label() string {
 		return "Stats"
 	case tabEnv:
 		return "Env"
+	case tabPorts:
+		return "Ports"
+	case tabMounts:
+		return "Mounts"
+	case tabHealth:
+		return "Health"
 	case tabTop:
 		return "Top"
 	case tabInspect:
@@ -282,6 +288,12 @@ func (m Model) tabContent(now time.Time) (string, string) {
 		return m.envTabContent()
 	case tabStats:
 		return m.statsTabContent()
+	case tabPorts:
+		return m.portsTabContent()
+	case tabMounts:
+		return m.mountsTabContent()
+	case tabHealth:
+		return m.healthTabContent(now)
 	case tabLogs:
 		return m.logsTabContent()
 	case tabInspect, tabTop:
@@ -439,6 +451,81 @@ func (m Model) statsTabContent() (string, string) {
 		return "Stats " + name, "No stats available (is the container running?)."
 	}
 	return "Stats " + name, strings.Join(lines, "\n")
+}
+
+// portsTabContent lists a selected container's published port mappings, built
+// from already-loaded configuration (no fetch needed).
+func (m Model) portsTabContent() (string, string) {
+	container, ok := m.selectedContainer()
+	if !ok {
+		return "Ports", "No container selected."
+	}
+	ports := container.Configuration.PublishedPorts
+	if len(ports) == 0 {
+		return "Ports " + container.Name(), "No published ports."
+	}
+	lines := make([]string, 0, len(ports))
+	for _, p := range ports {
+		host := p.HostAddress
+		if host == "" {
+			host = "0.0.0.0"
+		}
+		proto := p.Proto
+		if proto == "" {
+			proto = "tcp"
+		}
+		lines = append(lines, fmt.Sprintf("  %s:%d -> %d/%s", host, p.HostPort, p.ContainerPort, proto))
+	}
+	return "Ports " + container.Name(), strings.Join(lines, "\n")
+}
+
+// mountsTabContent lists a selected container's mounts (source -> destination,
+// with rw/ro), from already-loaded configuration.
+func (m Model) mountsTabContent() (string, string) {
+	container, ok := m.selectedContainer()
+	if !ok {
+		return "Mounts", "No container selected."
+	}
+	mounts := container.Configuration.Mounts
+	if len(mounts) == 0 {
+		return "Mounts " + container.Name(), "No mounts."
+	}
+	lines := make([]string, 0, len(mounts))
+	for _, mt := range mounts {
+		mode := "rw"
+		for _, opt := range mt.Options {
+			if opt == "ro" || opt == "readonly" {
+				mode = "ro"
+			}
+		}
+		src := mt.Source
+		if src == "" {
+			src = "-"
+		}
+		lines = append(lines, fmt.Sprintf("  %s -> %s  (%s)", src, emptyDash(mt.Destination), mode))
+	}
+	return "Mounts " + container.Name(), strings.Join(lines, "\n")
+}
+
+// healthTabContent shows a selected container's status overview. Apple's
+// container runtime has no docker-style health checks, so this reports the real
+// state, uptime, and resource attachment rather than inventing a check result.
+func (m Model) healthTabContent(now time.Time) (string, string) {
+	container, ok := m.selectedContainer()
+	if !ok {
+		return "Health", "No container selected."
+	}
+	lines := []string{
+		"  State:    " + container.State(),
+		"  Started:  " + emptyDash(container.StartedAgo(now)),
+		"  Image:    " + emptyDash(container.ImageName()),
+		"  Platform: " + container.Platform(),
+		"  Runtime:  " + emptyDash(container.Configuration.RuntimeHandler),
+		fmt.Sprintf("  Ports:    %d published", len(container.Configuration.PublishedPorts)),
+		fmt.Sprintf("  Mounts:   %d", len(container.Configuration.Mounts)),
+		fmt.Sprintf("  Networks: %d attached", len(container.Status.Networks)),
+	}
+	return "Health " + container.Name(), strings.Join(lines, "\n")
 }
 
 // currentStatSummary returns the current-value summary lines for a container's

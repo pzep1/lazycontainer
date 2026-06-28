@@ -106,6 +106,9 @@ const (
 	tabLogs
 	tabStats
 	tabEnv
+	tabPorts
+	tabMounts
+	tabHealth
 	tabTop
 	tabInspect
 )
@@ -581,6 +584,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
 		}
+		if tab, ok := m.mainTabAt(msg.X, msg.Y); ok {
+			cmd := m.activateTab(tab)
+			return m, cmd
+		}
 		if kind, ok := m.tabAt(msg.X, msg.Y); ok {
 			if m.active != kind {
 				m.active = kind
@@ -592,7 +599,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if index, ok := m.listIndexAt(msg.X, msg.Y); ok {
+		if kind, index, ok := m.listIndexAt(msg.X, msg.Y); ok {
+			if m.active != kind {
+				m.active = kind
+				m.clampCursors()
+			}
 			if m.setActiveVisibleIndex(index) {
 				m.resetPanel()
 				m.statusLine = "selected " + resourceLabel(m.active)
@@ -639,30 +650,94 @@ func (m Model) tabAt(x int, y int) (resourceKind, bool) {
 	return resourceContainers, false
 }
 
-func (m Model) listIndexAt(x int, y int) (int, bool) {
+// listIndexAt maps a click to the section and row under it. With every section's
+// list visible at once, it scans all of them (not just the focused one) so a
+// click in any panel both focuses it and selects the row.
+// mainTabAt maps a click on the main panel's tab strip to its tab. It mirrors
+// renderPanelHeader's layout exactly (labels separated by one space, dropped
+// once they overflow the content width) so the click targets line up with what
+// is drawn. It reports false when transient output replaces the tab strip.
+func (m Model) mainTabAt(x int, y int) (mainTab, bool) {
+	if m.bufferKind == bufOutput {
+		return tabConfig, false
+	}
+	layout, ok := m.viewLayout()
+	if !ok {
+		return tabConfig, false
+	}
+	// The tab strip is the first content row of the panel box: one border row
+	// sits above it, and the panel starts at panelX with a 1-col border + 1-col
+	// padding before its content.
+	if y != layout.bodyTop+1 {
+		return tabConfig, false
+	}
+	contentX := layout.panelX + 2
+	width := m.width - layout.panelX - 4
+	col := x - contentX
+	if col < 0 || col >= width {
+		return tabConfig, false
+	}
+	used := 0
+	for i, t := range m.activeTabs() {
+		label := t.label()
+		extra := len(label)
+		if i > 0 {
+			extra++ // separating space
+		}
+		if i > 0 && used+extra > width {
+			break
+		}
+		start := used
+		if i > 0 {
+			start++ // skip the separator space
+		}
+		used += extra
+		if col >= start && col < used {
+			return t, true
+		}
+	}
+	return tabConfig, false
+}
+
+func (m Model) listIndexAt(x int, y int) (resourceKind, int, bool) {
 	layout, ok := m.viewLayout()
 	if !ok || x < layout.sidebarContentX || x >= layout.sidebarWidth-1 {
-		return 0, false
+		return resourceContainers, 0, false
 	}
-	row := y - layout.listFirstRowY
-	if row < 0 || row >= layout.sidebar.listRows {
-		return 0, false
+	contentRow := y - layout.sidebarContentY
+	if contentRow < 0 {
+		return resourceContainers, 0, false
 	}
-
-	total := m.activeVisibleCount()
-	if total == 0 {
-		return 0, false
+	for _, kind := range sidebarOrder() {
+		n := layout.sidebar.listRows[kind]
+		if n == 0 {
+			continue
+		}
+		first := layout.sidebar.listFirstRow[kind]
+		if contentRow < first || contentRow >= first+n {
+			continue
+		}
+		total := m.visibleCount(kind)
+		if total == 0 {
+			return resourceContainers, 0, false
+		}
+		start := visibleStart(m.cursorFor(kind), layout.sidebar.listDataHeight[kind], total)
+		index := start + (contentRow - first)
+		if index < 0 || index >= total {
+			return resourceContainers, 0, false
+		}
+		return kind, index, true
 	}
-	start := visibleStart(m.activeCursor(), layout.listDataHeight, total)
-	index := start + row
-	if index < 0 || index >= total {
-		return 0, false
-	}
-	return index, true
+	return resourceContainers, 0, false
 }
 
 func (m Model) activeCursor() int {
-	switch m.active {
+	return m.cursorFor(m.active)
+}
+
+// cursorFor is the list cursor for any resource section.
+func (m Model) cursorFor(kind resourceKind) int {
+	switch kind {
 	case resourceContainers:
 		return m.containerCursor
 	case resourceImages:
@@ -681,7 +756,12 @@ func (m Model) activeCursor() int {
 }
 
 func (m Model) activeVisibleCount() int {
-	switch m.active {
+	return m.visibleCount(m.active)
+}
+
+// visibleCount is the number of (filter-respecting) rows a resource section has.
+func (m Model) visibleCount(kind resourceKind) int {
+	switch kind {
 	case resourceContainers:
 		return len(m.filteredContainerIndexes())
 	case resourceImages:
@@ -803,14 +883,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startContainerCommandPrompt(), nil
 	case ";":
 		return m.startCustomCommandPrompt()
-	case "tab":
-		m.active = (m.active + 1) % resourceCount
-		m.resetPanel()
+	case "tab", "right":
+		m.goToResource((m.active + 1) % resourceCount)
 		cmd := m.ensureMainPanelCmd()
 		return m, cmd
-	case "shift+tab":
-		m.active = (m.active - 1 + resourceCount) % resourceCount
-		m.resetPanel()
+	case "shift+tab", "left", "h":
+		m.goToResource((m.active - 1 + resourceCount) % resourceCount)
+		cmd := m.ensureMainPanelCmd()
+		return m, cmd
+	case "1", "2", "3", "4", "5", "6", "7", "8":
+		m.goToResource(resourceKind(key[0] - '1'))
 		cmd := m.ensureMainPanelCmd()
 		return m, cmd
 	case "[":
@@ -2448,6 +2530,16 @@ func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
 	}
 }
 
+func (m *Model) goToResource(kind resourceKind) {
+	if kind < 0 || kind >= resourceCount {
+		return
+	}
+	m.active = kind
+	m.clampCursors()
+	m.resetPanel()
+	m.statusLine = "selected " + resourceLabel(kind)
+}
+
 func (m *Model) moveSelection(delta int) {
 	switch m.active {
 	case resourceContainers:
@@ -2582,7 +2674,12 @@ func (m Model) View() string {
 
 	top := m.renderTopBar()
 	footer := m.renderFooter()
-	bodyHeight := m.height - lipgloss.Height(top) - lipgloss.Height(footer)
+	overview := m.renderOverview()
+	overviewHeight := 0
+	if overview != "" {
+		overviewHeight = lipgloss.Height(overview)
+	}
+	bodyHeight := m.height - lipgloss.Height(top) - lipgloss.Height(footer) - overviewHeight
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
@@ -2599,31 +2696,95 @@ func (m Model) View() string {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, panel)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, top, body, footer)
+	parts := []string{top}
+	if overview != "" {
+		parts = append(parts, overview)
+	}
+	parts = append(parts, body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// fleetStats aggregates the latest per-container samples into a fleet mean CPU%
+// and total memory in use. n is how many containers contributed a sample.
+func (m Model) fleetStats() (cpuMean float64, memTotal float64, n int) {
+	var cpuSum float64
+	for _, st := range m.stats {
+		sample, ok := statHistorySampleFromStat(st)
+		if !ok {
+			continue
+		}
+		if sample.hasCPU {
+			cpuSum += sample.cpuPercent
+		}
+		if sample.hasMemory {
+			memTotal += sample.memoryBytes
+		}
+		n++
+	}
+	if n > 0 {
+		cpuMean = cpuSum / float64(n)
+	}
+	return cpuMean, memTotal, n
+}
+
+// renderOverview draws the pinned, read-only fleet summary strip shown between
+// the top bar and the body. It returns "" when the terminal is too short or an
+// overlay is open, so callers can omit the row and reclaim its height.
+func (m Model) renderOverview() string {
+	if m.width < 60 || m.height < 18 || m.menu != nil || m.showHelp {
+		return ""
+	}
+	running := 0
+	for _, c := range m.containers {
+		if c.State() == "running" {
+			running++
+		}
+	}
+	segs := []string{
+		fmt.Sprintf("%d ctr (%d up)", len(m.containers), running),
+		fmt.Sprintf("%d img", len(m.images)),
+	}
+	if cpuMean, memTotal, n := m.fleetStats(); n > 0 {
+		segs = append(segs, fmt.Sprintf("cpu %5.1f%%", cpuMean), "mem "+containercli.FormatBytes(int64(memTotal)))
+	}
+	segs = append(segs, "disk "+m.systemUsage.TotalSize()+" / "+m.systemUsage.TotalReclaimable()+" reclaim")
+	if state := m.builder.State(); state != "" {
+		segs = append(segs, "builder "+state)
+	}
+	line := "FLEET  " + strings.Join(segs, " · ")
+	return overviewStyle.Width(m.width).Render(truncate(line, m.width-2))
 }
 
 func (m Model) viewLayout() (viewLayout, bool) {
 	if m.width < 60 || m.height < 8 {
 		return viewLayout{}, false
 	}
-	bodyHeight := m.height - 2
+	// The optional overview strip sits between the top bar and the body, so it
+	// pushes the body (and every sidebar hit-test row) down by its height.
+	overviewHeight := 0
+	if ov := m.renderOverview(); ov != "" {
+		overviewHeight = lipgloss.Height(ov)
+	}
+	bodyTop := 1 + overviewHeight
+	bodyHeight := m.height - 2 - overviewHeight
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
 	sidebarWidth := m.sidebarWidth()
 	// Header rows live inside the sidebar box: one border row + one (zero)
-	// padding row sit above the first content line, so content starts at Y=2.
-	const contentY = 2
+	// padding row sit above the first content line, so content starts one row
+	// into the body box.
+	contentY := bodyTop + 1
 	sidebar := m.buildSidebar(sidebarWidth, bodyHeight-2)
 	return viewLayout{
-		bodyTop:         1,
+		bodyTop:         bodyTop,
 		bodyHeight:      bodyHeight,
 		sidebarWidth:    sidebarWidth,
 		panelX:          sidebarWidth,
 		sidebarContentX: 2,
 		sidebarContentY: contentY,
-		listFirstRowY:   contentY + sidebar.listFirstRow,
-		listDataHeight:  sidebar.listDataHeight,
+		listFirstRowY:   contentY + sidebar.listFirstRow[m.active],
+		listDataHeight:  sidebar.listDataHeight[m.active],
 		sidebar:         sidebar,
 	}, true
 }
@@ -2727,6 +2888,10 @@ var (
 	footerStyle = lipgloss.NewStyle().
 			Foreground(colorMuted).
 			Padding(0, 1)
+	overviewStyle = lipgloss.NewStyle().
+			Foreground(colorText).
+			Background(lipgloss.Color("236")).
+			Padding(0, 1)
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorPanel).
@@ -2737,8 +2902,12 @@ var (
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("57")).
 			Bold(true)
-	mutedStyle = lipgloss.NewStyle().Foreground(colorMuted)
-	errorStyle = lipgloss.NewStyle().Foreground(colorRed)
+	// cursorRestStyle marks the selected row of an UNfocused section: bold but
+	// without the bright background, so each panel shows its current item
+	// without competing with the focused panel's highlight.
+	cursorRestStyle = lipgloss.NewStyle().Foreground(colorText).Bold(true)
+	mutedStyle      = lipgloss.NewStyle().Foreground(colorMuted)
+	errorStyle      = lipgloss.NewStyle().Foreground(colorRed)
 
 	runningStyle = lipgloss.NewStyle().Foreground(colorGreen)
 	stoppedStyle = lipgloss.NewStyle().Foreground(colorYellow)
@@ -2814,19 +2983,27 @@ func (m Model) renderFooter() string {
 		status = "ready"
 	}
 	if activeFilter(m.filter) != "" {
-		status = status + " · filter: " + m.filter
+		status = status + " · filter: " + truncate(m.filter, 18)
 	}
 	status = status + " · " + m.autoRefreshLabel()
 
 	inner := m.width - 2
-	statusText := truncate(status, inner)
+	// Reserve a stable slot for the status text so the hint strip doesn't
+	// reflow every time a routine message ("refreshed" → "loaded images")
+	// changes length. Short messages all share the reserved width, keeping the
+	// hints anchored; only an unusually long message (a guard or error) is
+	// allowed to eat into the hint space, dropping the lowest-priority hints.
+	const statusReserve = 30
+	statusFootprint := len(status)
+	if statusFootprint < statusReserve {
+		statusFootprint = statusReserve
+	}
+	hints, hintsWidth := fitKeyHints(m.footerKeyHints(), inner-statusFootprint-1)
+	statusText := truncate(status, inner-hintsWidth-1)
 	statusStyled := mutedStyle.Render(statusText)
 	if m.err != nil {
 		statusStyled = errorStyle.Render(statusText)
 	}
-	// The status message takes priority; hints fill whatever space is left,
-	// dropping the lowest-priority (trailing) ones when the line is tight.
-	hints, hintsWidth := fitKeyHints(m.footerKeyHints(), inner-len(statusText)-3)
 	gap := inner - len(statusText) - hintsWidth
 	if gap < 1 {
 		gap = 1
@@ -2889,7 +3066,7 @@ func fitKeyHints(pairs [][2]string, maxWidth int) (string, int) {
 
 func (m Model) autoRefreshLabel() string {
 	if m.autoRefresh {
-		return "u auto:on"
+		return "u auto:on "
 	}
 	return "u auto:off"
 }
@@ -3092,9 +3269,9 @@ func customCommandPlaceholders() []struct {
 type sidebarRender struct {
 	lines          []string             // content lines (inside the box border/padding)
 	headerRow      map[resourceKind]int // content-relative row of each section header
-	listFirstRow   int                  // content-relative row of the focused list's first item
-	listRows       int                  // item rows actually shown for the focused section
-	listDataHeight int                  // paging capacity used to window the focused list
+	listFirstRow   map[resourceKind]int // content-relative row of each section's first item
+	listRows       map[resourceKind]int // item rows actually shown for each section
+	listDataHeight map[resourceKind]int // paging capacity used to window each section
 }
 
 func sidebarOrder() []resourceKind {
@@ -3105,8 +3282,10 @@ func sidebarOrder() []resourceKind {
 }
 
 // buildSidebar lays out the lazydocker-style stacked sidebar: every resource is
-// a titled section header, and the focused section expands to show its list.
-// contentHeight is the room inside the sidebar box (border + padding excluded).
+// a titled section header and — unlike the old accordion — every section shows
+// its list at once. Vertical space is split by sidebarRowBudgets, which gives
+// the focused section the largest share. contentHeight is the room inside the
+// sidebar box (border + padding excluded).
 func (m Model) buildSidebar(width int, contentHeight int) sidebarRender {
 	order := sidebarOrder()
 	innerWidth := width - 4 // box border (2 cols) + horizontal padding (2 cols)
@@ -3116,41 +3295,28 @@ func (m Model) buildSidebar(width int, contentHeight int) sidebarRender {
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
-	// Every section costs one header row; the focused section gets the rest.
-	listRegion := contentHeight - len(order)
-	if listRegion < 0 {
-		listRegion = 0
-	}
+	budgets := m.sidebarRowBudgets(order, contentHeight)
 	out := sidebarRender{
 		headerRow:      make(map[resourceKind]int, len(order)),
-		listFirstRow:   -1,
-		listDataHeight: listRegion - 1,
-	}
-	if out.listDataHeight < 0 {
-		out.listDataHeight = 0
+		listFirstRow:   make(map[resourceKind]int, len(order)),
+		listRows:       make(map[resourceKind]int, len(order)),
+		listDataHeight: make(map[resourceKind]int, len(order)),
 	}
 	for _, kind := range order {
+		rows, shown := budgets[kind]
+		if !shown {
+			continue // no room for this section on a very short terminal
+		}
 		out.headerRow[kind] = len(out.lines)
-		out.lines = append(out.lines, m.renderSidebarHeader(kind, innerWidth))
-		if kind != m.active || listRegion < 1 {
+		out.lines = append(out.lines, m.renderSidebarHeader(kind, innerWidth, rows))
+		out.listDataHeight[kind] = rows
+		out.listFirstRow[kind] = len(out.lines)
+		if rows < 1 {
 			continue
 		}
-		items := m.renderActiveList(kind, innerWidth, listRegion)
-		for idx, row := range items {
-			if idx == 1 {
-				out.listFirstRow = len(out.lines)
-			}
-			out.lines = append(out.lines, row)
-		}
-		if len(items) > 1 {
-			out.listRows = len(items) - 1
-		}
-		if out.listFirstRow == -1 {
-			out.listFirstRow = len(out.lines)
-		}
-	}
-	if out.listFirstRow == -1 {
-		out.listFirstRow = len(out.lines)
+		items := m.renderResourceList(kind, innerWidth, rows)
+		out.listRows[kind] = len(items)
+		out.lines = append(out.lines, items...)
 	}
 	// Never overflow the box height (extreme small terminals).
 	if len(out.lines) > contentHeight {
@@ -3159,14 +3325,97 @@ func (m Model) buildSidebar(width int, contentHeight int) sidebarRender {
 	return out
 }
 
+// sidebarRowBudgets splits contentHeight across the stacked sections. Every
+// shown section costs one header row; the remainder is distributed as list rows
+// with the focused section weighted double. On terminals too short to show all
+// sections, the focused section is guaranteed a few rows first and the rest get
+// header-only billing in order until the height runs out (a section absent from
+// the returned map is not shown at all). The bool reports whether the section is
+// shown; the int is its list-row budget.
+func (m Model) sidebarRowBudgets(order []resourceKind, contentHeight int) map[resourceKind]int {
+	rows := make(map[resourceKind]int, len(order))
+	shown := make(map[resourceKind]bool, len(order))
+	budget := contentHeight
+	focused := m.active
+
+	// 1) Guarantee the focused section a header plus a few rows, so j/k and the
+	//    action keys stay usable even when the terminal is very short.
+	if budget > 0 {
+		budget-- // focused header
+		shown[focused] = true
+		const focusedReserve = 4
+		give := m.sidebarWant(focused)
+		if give > focusedReserve {
+			give = focusedReserve
+		}
+		if give > budget {
+			give = budget
+		}
+		rows[focused] = give
+		budget -= give
+	}
+	// 2) A header row for every other section, in order, while there is room.
+	for _, kind := range order {
+		if kind == focused || budget <= 0 {
+			continue
+		}
+		budget--
+		shown[kind] = true
+	}
+	// 3) Hand out any leftover rows as list rows, focused weighted double,
+	//    never exceeding a section's item count.
+	for budget > 0 {
+		progressed := false
+		for _, kind := range order {
+			if !shown[kind] {
+				continue
+			}
+			step := 1
+			if kind == focused {
+				step = 2
+			}
+			for s := 0; s < step && budget > 0 && rows[kind] < m.sidebarWant(kind); s++ {
+				rows[kind]++
+				budget--
+				progressed = true
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+
+	out := make(map[resourceKind]int, len(order))
+	for _, kind := range order {
+		if shown[kind] {
+			out[kind] = rows[kind]
+		}
+	}
+	return out
+}
+
+// sidebarWant is how many list rows a section could usefully fill: its visible
+// item count, or one row for the focused-but-empty case (to show the "no items"
+// message). Unfocused empty sections want zero rows (header only).
+func (m Model) sidebarWant(kind resourceKind) int {
+	count := m.visibleCount(kind)
+	if count == 0 {
+		if kind == m.active {
+			return 1
+		}
+		return 0
+	}
+	return count
+}
+
 func (m Model) renderSidebar(width int, height int) string {
 	style := activePanelStyle.Width(width - 2).Height(height - 2)
 	sb := m.buildSidebar(width, height-2)
 	return style.Render(strings.Join(sb.lines, "\n"))
 }
 
-// renderActiveList renders the item list for the focused section.
-func (m Model) renderActiveList(kind resourceKind, width int, height int) []string {
+// renderResourceList renders the windowed item rows for a resource section.
+func (m Model) renderResourceList(kind resourceKind, width int, height int) []string {
 	switch kind {
 	case resourceContainers:
 		return m.renderContainerList(width, height)
@@ -3189,8 +3438,10 @@ func (m Model) renderActiveList(kind resourceKind, width int, height int) []stri
 }
 
 // renderSidebarHeader draws one stacked-panel title bar. The focused section
-// gets an accent bar + bold accent title; the rest stay muted.
-func (m Model) renderSidebarHeader(kind resourceKind, width int) string {
+// gets an accent bar + bold accent title; the rest stay muted. When the section
+// shows rows (rows > 0) a muted column hint is right-aligned on the header so
+// the dense rows below have labels without spending a whole row on them.
+func (m Model) renderSidebarHeader(kind resourceKind, width int, rows int) string {
 	if width < 4 {
 		return truncate(sidebarTitle(kind), width)
 	}
@@ -3198,11 +3449,50 @@ func (m Model) renderSidebarHeader(kind resourceKind, width int) string {
 	if count := m.sidebarCountLabel(kind); count != "" {
 		title += " (" + count + ")"
 	}
-	body := truncate(title, width-2)
+	title = truncate(title, width-2)
+
+	leftPlainWidth := 2 + len(title) // "▌ "/"  " marker + title
+	var left string
 	if kind == m.active {
-		return sidebarBarStyle.Render("▌ ") + sidebarActiveStyle.Render(body)
+		left = sidebarBarStyle.Render("▌ ") + sidebarActiveStyle.Render(title)
+	} else {
+		left = "  " + sidebarHeaderStyle.Render(title)
 	}
-	return "  " + sidebarHeaderStyle.Render(body)
+
+	hint := sidebarColumns(kind)
+	if rows < 1 || hint == "" {
+		return left
+	}
+	gap := width - leftPlainWidth - len(hint)
+	if gap < 1 {
+		return left // no room for the column hint
+	}
+	return left + strings.Repeat(" ", gap) + mutedStyle.Render(hint)
+}
+
+// sidebarColumns is the right-aligned column-label hint shown on a section's
+// header row, describing the trailing columns of that section's rows.
+func sidebarColumns(kind resourceKind) string {
+	switch kind {
+	case resourceContainers:
+		return "state / cpu / mem"
+	case resourceImages:
+		return "size  used"
+	case resourceBuilder:
+		return "state"
+	case resourceVolumes:
+		return "size  used"
+	case resourceNetworks:
+		return "mode  used"
+	case resourceMachines:
+		return "state"
+	case resourceRegistries:
+		return "user"
+	case resourceSystem:
+		return "status"
+	default:
+		return ""
+	}
 }
 
 func sidebarTitle(kind resourceKind) string {
@@ -3284,28 +3574,107 @@ func resourceLabel(kind resourceKind) string {
 	}
 }
 
+// imageInUseCount is how many loaded containers run from the named image.
+func (m Model) imageInUseCount(name string) int {
+	n := 0
+	for _, c := range m.containers {
+		if c.ImageName() == name {
+			n++
+		}
+	}
+	return n
+}
+
+// volumeInUseCount is how many loaded containers mount the named volume.
+func (m Model) volumeInUseCount(name string) int {
+	n := 0
+	for _, c := range m.containers {
+		for _, mount := range c.Configuration.Mounts {
+			if mount.Source == name {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// networkInUseCount is how many loaded containers attach to the named network.
+func (m Model) networkInUseCount(name string) int {
+	n := 0
+	for _, c := range m.containers {
+		for _, net := range c.Configuration.Networks {
+			if net.Network == name {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// trimImageRef shortens an image reference for dense rows by dropping the
+// registry host / namespace, keeping the final "name:tag" segment.
+func trimImageRef(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
+// inUseBadge is a compact, fixed-width in-use marker for sidebar rows: "●N" when
+// something references the resource, "·" when nothing does. It stays plain text
+// so it survives fitColumns' width math (the row is colored as a whole).
+func inUseBadge(count int) string {
+	if count > 0 {
+		return fmt.Sprintf("●%d", count)
+	}
+	return "·"
+}
+
+// styleSidebarRow highlights a list row. The selected row is rendered with the
+// bright background when its section is focused, or bold-only when it is not, so
+// every panel shows its current item without the focused panel's emphasis.
+func styleSidebarRow(line string, width int, selected bool, focused bool) string {
+	if !selected {
+		return line
+	}
+	if focused {
+		return selectedStyle.Width(width).Render(truncate(line, width))
+	}
+	return cursorRestStyle.Render(truncate(line, width))
+}
+
 func (m Model) renderContainerList(width int, height int) []string {
 	indexes := m.filteredContainerIndexes()
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("containers"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("name", "state / cpu / mem", width))}
-	start := visibleStart(m.containerCursor, height-1, len(indexes))
-	end := start + height - 1
+	focused := m.active == resourceContainers
+	rows := make([]string, 0, height)
+	start := visibleStart(m.containerCursor, height, len(indexes))
+	end := start + height
 	if end > len(indexes) {
 		end = len(indexes)
 	}
 	now := effectiveNow(m.lastUpdated)
 	for idx := start; idx < end; idx++ {
 		container := m.containers[indexes[idx]]
-		name := truncate(container.Name(), 22)
-		meta := fmt.Sprintf("%s  %s", container.State(), container.CreatedAgo(now))
-		if summary := m.statListSummary(container.Name()); summary != "" {
-			meta = fmt.Sprintf("%s  %s", container.State(), summary)
+		// On a wide enough sidebar, surface the image ref alongside the name;
+		// on narrow terminals it degrades to just the name.
+		left := truncate(container.Name(), 22)
+		if width >= 62 {
+			if img := trimImageRef(container.ImageName()); img != "" {
+				left = truncate(container.Name(), 22) + "  " + truncate(img, 24)
+			}
 		}
-		line := fitColumns(name, meta, width)
+		meta := padRight(container.State(), 8) + " " + padLeft(container.CreatedAgo(now), 10)
+		if summary := m.statListSummary(container.Name()); summary != "" {
+			meta = padRight(container.State(), 8) + " " + summary
+		}
+		line := fitColumns(left, meta, width)
 		if idx == m.containerCursor {
-			line = selectedStyle.Width(width).Render(truncate(line, width))
+			line = styleSidebarRow(line, width, true, focused)
 		} else {
 			line = colorState(line, container.State())
 		}
@@ -3319,35 +3688,29 @@ func (m Model) renderImageList(width int, height int) []string {
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("images"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("image", "size", width))}
-	start := visibleStart(m.imageCursor, height-1, len(indexes))
-	end := start + height - 1
+	focused := m.active == resourceImages
+	rows := make([]string, 0, height)
+	start := visibleStart(m.imageCursor, height, len(indexes))
+	end := start + height
 	if end > len(indexes) {
 		end = len(indexes)
 	}
 	for idx := start; idx < end; idx++ {
 		image := m.images[indexes[idx]]
 		name := truncate(image.Name(), 34)
-		line := fitColumns(name, image.Size(), width)
-		if idx == m.imageCursor {
-			line = selectedStyle.Width(width).Render(truncate(line, width))
-		}
-		rows = append(rows, line)
+		meta := padLeft(image.Size(), 9) + "  " + padLeft(inUseBadge(m.imageInUseCount(image.Name())), 4)
+		line := fitColumns(name, meta, width)
+		rows = append(rows, styleSidebarRow(line, width, idx == m.imageCursor, focused))
 	}
 	return rows
 }
 
 func (m Model) renderBuilderList(width int, height int) []string {
-	if !m.builderMatchesFilter() {
-		return []string{mutedStyle.Render(m.emptyListMessage("builder"))}
-	}
-	rows := []string{mutedStyle.Render(fitColumns("builder", "state", width))}
-	if height <= 1 {
-		return rows
+	if !m.builderMatchesFilter() || height < 1 {
+		return nil
 	}
 	line := fitColumns(m.builder.Name(), m.builder.State(), width)
-	line = selectedStyle.Width(width).Render(truncate(line, width))
-	return append(rows, line)
+	return []string{styleSidebarRow(line, width, true, m.active == resourceBuilder)}
 }
 
 func (m Model) renderVolumeList(width int, height int) []string {
@@ -3355,22 +3718,19 @@ func (m Model) renderVolumeList(width int, height int) []string {
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("volumes"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("volume", "size", width))}
-	start := visibleStart(m.volumeCursor, height-1, len(indexes))
-	end := start + height - 1
+	focused := m.active == resourceVolumes
+	rows := make([]string, 0, height)
+	start := visibleStart(m.volumeCursor, height, len(indexes))
+	end := start + height
 	if end > len(indexes) {
 		end = len(indexes)
 	}
-	now := effectiveNow(m.lastUpdated)
 	for idx := start; idx < end; idx++ {
 		volume := m.volumes[indexes[idx]]
 		name := truncate(volume.Name(), 34)
-		meta := fmt.Sprintf("%s  %s", volume.Size(), volume.CreatedAgo(now))
+		meta := padLeft(volume.Size(), 9) + "  " + padLeft(inUseBadge(m.volumeInUseCount(volume.Name())), 4)
 		line := fitColumns(name, meta, width)
-		if idx == m.volumeCursor {
-			line = selectedStyle.Width(width).Render(truncate(line, width))
-		}
-		rows = append(rows, line)
+		rows = append(rows, styleSidebarRow(line, width, idx == m.volumeCursor, focused))
 	}
 	return rows
 }
@@ -3380,21 +3740,19 @@ func (m Model) renderNetworkList(width int, height int) []string {
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("networks"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("network", "mode", width))}
-	start := visibleStart(m.networkCursor, height-1, len(indexes))
-	end := start + height - 1
+	focused := m.active == resourceNetworks
+	rows := make([]string, 0, height)
+	start := visibleStart(m.networkCursor, height, len(indexes))
+	end := start + height
 	if end > len(indexes) {
 		end = len(indexes)
 	}
 	for idx := start; idx < end; idx++ {
 		network := m.networks[indexes[idx]]
 		name := truncate(network.Name(), 34)
-		meta := emptyDash(network.Configuration.Mode)
+		meta := padRight(emptyDash(network.Configuration.Mode), 6) + " " + padLeft(inUseBadge(m.networkInUseCount(network.Name())), 4)
 		line := fitColumns(name, meta, width)
-		if idx == m.networkCursor {
-			line = selectedStyle.Width(width).Render(truncate(line, width))
-		}
-		rows = append(rows, line)
+		rows = append(rows, styleSidebarRow(line, width, idx == m.networkCursor, focused))
 	}
 	return rows
 }
@@ -3404,9 +3762,10 @@ func (m Model) renderMachineList(width int, height int) []string {
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("machines"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("machine", "state", width))}
-	start := visibleStart(m.machineCursor, height-1, len(indexes))
-	end := start + height - 1
+	focused := m.active == resourceMachines
+	rows := make([]string, 0, height)
+	start := visibleStart(m.machineCursor, height, len(indexes))
+	end := start + height
 	if end > len(indexes) {
 		end = len(indexes)
 	}
@@ -3414,13 +3773,13 @@ func (m Model) renderMachineList(width int, height int) []string {
 	for idx := start; idx < end; idx++ {
 		machine := m.machines[indexes[idx]]
 		name := truncate(machine.Name(), 26)
-		meta := fmt.Sprintf("%s  %s", machine.State(), machine.CreatedAgo(now))
+		meta := padRight(machine.State(), 8) + " " + padLeft(machine.CreatedAgo(now), 10)
 		if machine.Default {
 			name = "* " + name
 		}
 		line := fitColumns(name, meta, width)
 		if idx == m.machineCursor {
-			line = selectedStyle.Width(width).Render(truncate(line, width))
+			line = styleSidebarRow(line, width, true, focused)
 		} else if machine.State() == "running" {
 			line = runningStyle.Render(line)
 		}
@@ -3434,9 +3793,10 @@ func (m Model) renderRegistryList(width int, height int) []string {
 	if len(indexes) == 0 {
 		return []string{mutedStyle.Render(m.emptyListMessage("registries"))}
 	}
-	rows := []string{mutedStyle.Render(fitColumns("registry", "user", width))}
-	start := visibleStart(m.registryCursor, height-1, len(indexes))
-	end := start + height - 1
+	focused := m.active == resourceRegistries
+	rows := make([]string, 0, height)
+	start := visibleStart(m.registryCursor, height, len(indexes))
+	end := start + height
 	if end > len(indexes) {
 		end = len(indexes)
 	}
@@ -3445,26 +3805,18 @@ func (m Model) renderRegistryList(width int, height int) []string {
 		name := truncate(registry.Name(), 34)
 		meta := emptyDash(registry.User())
 		line := fitColumns(name, meta, width)
-		if idx == m.registryCursor {
-			line = selectedStyle.Width(width).Render(truncate(line, width))
-		}
-		rows = append(rows, line)
+		rows = append(rows, styleSidebarRow(line, width, idx == m.registryCursor, focused))
 	}
 	return rows
 }
 
 func (m Model) renderSystemList(width int, height int) []string {
-	if !m.systemMatchesFilter() {
-		return []string{mutedStyle.Render(m.emptyListMessage("system"))}
+	if !m.systemMatchesFilter() || height < 1 {
+		return nil
 	}
-	rows := []string{mutedStyle.Render(fitColumns("system", "status", width))}
-	if height <= 1 {
-		return rows
-	}
-	meta := fmt.Sprintf("%s  %s used", emptyDash(m.system.Status), m.systemUsage.TotalSize())
+	meta := fmt.Sprintf("%s  %s used", emptyDash(m.system.Status), padLeft(m.systemUsage.TotalSize(), 9))
 	line := fitColumns("system", meta, width)
-	line = selectedStyle.Width(width).Render(truncate(line, width))
-	return append(rows, line)
+	return []string{styleSidebarRow(line, width, true, m.active == resourceSystem)}
 }
 
 func (m Model) emptyListMessage(kind string) string {
@@ -4078,6 +4430,16 @@ func stripNewline(value string) string {
 	value = strings.ReplaceAll(value, "\n", " ")
 	value = strings.ReplaceAll(value, "\r", " ")
 	return value
+}
+
+// padLeft right-aligns value in a field of width columns (space-padded on the
+// left) so right-aligned, live-updating columns keep a constant width as their
+// contents gain or lose characters. It never truncates.
+func padLeft(value string, width int) string {
+	if len(value) >= width {
+		return value
+	}
+	return strings.Repeat(" ", width-len(value)) + value
 }
 
 func emptyDash(value string) string {

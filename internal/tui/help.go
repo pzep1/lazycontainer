@@ -17,6 +17,8 @@ func helpLines() []string {
 	}{
 		{"Global", [][2]string{
 			{"tab / shift+tab", "switch resource pane"},
+			{"←/→ or h / tab", "previous / next resource pane"},
+			{"1-8", "jump to resource pane"},
 			{"[ / ]", "previous / next main-panel tab"},
 			{"+ / _", "cycle screen mode (normal/half/fullscreen)"},
 			{"/", "filter list"},
