@@ -1,0 +1,143 @@
+name: Release
+
+# Publishes a GitHub Release and bumps the Homebrew formulae whenever a
+# version tag is pushed:
+#
+#   git tag v0.6.0 && git push origin v0.6.0
+#
+# The job runs in three deliberate phases so a half-finished release is not
+# possible:
+#   1. preflight  — validate the tag, the tap credential and access, and
+#                   compute the archive sha256. No side effects.
+#   2. mutate     — bump the in-tree formula (commit to main) and the tap repo
+#                   formula, using one canonical helper (.github/bump-formula.sh)
+#                   that asserts each file actually holds the new url + sha256
+#                   (failing loudly if a formula's shape has drifted).
+#   3. publish    — create the GitHub Release last and idempotently.
+# Every mutation is rerunnable (a re-run is a no-op), so the only irreversible
+# step — publishing the release — happens after everything required succeeds.
+#
+# The tap lives in a separate repo (pzep1/homebrew-lazycont), which the default
+# GITHUB_TOKEN can't write to. Cross-repo write is granted by a deploy key: a
+# write-enabled SSH key on the tap repo whose private half is the required
+# HOMEBREW_TAP_DEPLOY_KEY secret here. (Provisioned via the gh CLI; to rotate,
+# run `ssh-keygen`, `gh repo deploy-key add --allow-write` on the tap, and
+# `gh secret set HOMEBREW_TAP_DEPLOY_KEY` here.) The tap bump is part of the
+# release contract: if the secret is missing, preflight fails before any change.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: release and bump formulae
+    runs-on: ubuntu-latest
+    steps:
+      # Check out main explicitly: this job commits the in-tree formula bump
+      # back to it, and relying on the tag-triggered checkout state to reach
+      # main is fragile.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # ---------------------------------------------------------------- #
+      # Preflight: validate everything before any side effect.            #
+      # ---------------------------------------------------------------- #
+      - name: Preflight — tag is semver
+        run: |
+          # The trigger matches any v* tag, but the formula updater only
+          # supports strict MAJOR.MINOR.PATCH. Reject other shapes up front.
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH; refusing to release." >&2
+            exit 1
+          fi
+
+      - name: Preflight — set up tap deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "HOMEBREW_TAP_DEPLOY_KEY is not set, but the tap bump is part of the" >&2
+            echo "release contract. Provision the deploy key before releasing." >&2
+            exit 1
+          fi
+          key="$RUNNER_TEMP/tap_deploy_key"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          # Export for every later git step that touches the tap.
+          echo "GIT_SSH_COMMAND=ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+
+      - name: Preflight — verify tap access
+        run: git ls-remote git@github.com:pzep1/homebrew-lazycont.git >/dev/null
+
+      - name: Preflight — compute release tarball sha256
+        id: sha
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          # Retry: GitHub's tag archive can take a moment to become available.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL "$url" -o release.tar.gz; then
+              break
+            fi
+            echo "Tarball not ready yet (attempt $attempt), retrying..."
+            sleep 10
+          done
+          sha="$(sha256sum release.tar.gz | cut -d' ' -f1)"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------- #
+      # Mutate: bump both formulae with the canonical helper.             #
+      # ---------------------------------------------------------------- #
+      - name: Bump in-tree formula on main
+        env:
+          VERSION: ${{ steps.sha.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          .github/bump-formula.sh Formula/lazycontainer.rb "$VERSION" "$SHA256"
+          if git diff --quiet -- Formula/lazycontainer.rb; then
+            echo "In-tree formula already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Bump in-tree Homebrew formula to v${VERSION}" -- Formula/lazycontainer.rb
+          git push origin HEAD:main
+
+      - name: Bump tap repo formula
+        env:
+          VERSION: ${{ steps.sha.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          git clone git@github.com:pzep1/homebrew-lazycont.git tap
+          .github/bump-formula.sh tap/Formula/lazycontainer.rb "$VERSION" "$SHA256"
+          cd tap
+          if git diff --quiet; then
+            echo "Tap formula already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Bump lazycontainer to v${VERSION}"
+          git push origin HEAD
+
+      # ---------------------------------------------------------------- #
+      # Publish: idempotent, and last — every required step has passed.   #
+      # ---------------------------------------------------------------- #
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; nothing to do."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --latest \
+            --generate-notes
