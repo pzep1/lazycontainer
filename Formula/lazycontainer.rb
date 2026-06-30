@@ -1,8 +1,8 @@
 class Lazycontainer < Formula
   desc "Lazydocker-style terminal UI for Apple's container CLI"
   homepage "https://github.com/pzep1/lazycontainer"
-  url "https://github.com/pzep1/lazycontainer/archive/refs/tags/v0.5.1.tar.gz"
-  sha256 "9f207ab5b0cffc0dedd146e44ef3f8546cdef3a19f6c35d40005e4367039b6c4"
+  url "https://github.com/pzep1/lazycontainer/archive/refs/tags/v0.5.2.tar.gz"
+  sha256 "6369fa5237e301fb8ed21fb06cd70772213b426677001883a06dc5cac7382e0e"
   license "GPL-3.0-or-later"
   head "https://github.com/pzep1/lazycontainer.git", branch: "main"
 

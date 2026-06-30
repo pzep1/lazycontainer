@@ -106,7 +106,7 @@ selected item.
 
 ## More ways to run
 
-The Homebrew formula taps [`pzep1/homebrew-lazycont`](https://github.com/pzep1/homebrew-lazycont) and builds **lazycontainer v0.5.1** from the latest tagged release.
+The Homebrew formula taps [`pzep1/homebrew-lazycont`](https://github.com/pzep1/homebrew-lazycont) and builds **lazycontainer v0.5.2** from the latest tagged release.
 
 Or run from source (needs Go 1.26+ to match `go.mod`):
 
