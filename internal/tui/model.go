@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/pzep1/lazycont/internal/appmeta"
+	"github.com/pzep1/lazycont/internal/compose"
 	"github.com/pzep1/lazycont/internal/containercli"
 )
 
@@ -22,6 +22,8 @@ type Client interface {
 	SystemStatus(context.Context) (containercli.SystemStatus, error)
 	SystemDiskUsage(context.Context) (containercli.SystemDiskUsage, error)
 	SystemVersion(context.Context) ([]containercli.SystemVersion, error)
+	SystemDNS(context.Context) ([]containercli.SystemDNSDomain, error)
+	SystemProperties(context.Context) ([]containercli.SystemProperty, error)
 	Containers(context.Context) ([]containercli.Container, error)
 	Images(context.Context) ([]containercli.Image, error)
 	Volumes(context.Context) ([]containercli.Volume, error)
@@ -32,6 +34,8 @@ type Client interface {
 	Stats(context.Context, ...string) ([]containercli.Stat, error)
 	Logs(context.Context, string, int) (string, error)
 	FollowLogsCommand(string, int) (*exec.Cmd, error)
+	BootLogs(context.Context, string, int) (string, error)
+	MachineBootLogs(context.Context, string, int) (string, error)
 	MachineLogs(context.Context, string, int) (string, error)
 	FollowMachineLogsCommand(string, int) (*exec.Cmd, error)
 	SystemLogs(context.Context, string) (string, error)
@@ -72,6 +76,9 @@ type Client interface {
 	Restart(context.Context, string) error
 	StopMachine(context.Context, string) error
 	Kill(context.Context, string) error
+	StopAll(context.Context) error
+	KillAll(context.Context) error
+	DeleteAllContainers(context.Context, bool) error
 	DeleteContainer(context.Context, string, bool) error
 	DeleteImage(context.Context, string, bool) error
 	CreateVolume(context.Context, string, string) error
@@ -89,6 +96,7 @@ type resourceKind int
 
 const (
 	resourceContainers resourceKind = iota
+	resourceServices
 	resourceImages
 	resourceBuilder
 	resourceVolumes
@@ -149,24 +157,6 @@ const (
 	bufOutput                   // panel renders transient command output
 )
 
-type confirmAction int
-
-const (
-	confirmNone confirmAction = iota
-	confirmDeleteContainer
-	confirmPruneContainers
-	confirmDeleteImage
-	confirmPruneImages
-	confirmDeleteVolume
-	confirmDeleteNetwork
-	confirmPruneVolumes
-	confirmPruneNetworks
-	confirmDeleteMachine
-	confirmLogoutRegistry
-	confirmDeleteBuilder
-	confirmStopSystem
-)
-
 type promptKind int
 
 const (
@@ -190,10 +180,13 @@ const (
 	promptSetMachine
 )
 
+// pendingConfirm is a queued destructive action awaiting a y/n confirmation.
+// run performs the action and returns a status message; defining it at each
+// action's call site keeps confirmation execution with the feature that owns it
+// rather than in a central switch.
 type pendingConfirm struct {
-	action confirmAction
-	target string
-	label  string
+	label string
+	run   func(context.Context, Model) (string, error)
 }
 
 type Options struct {
@@ -217,6 +210,13 @@ type Options struct {
 	LogsTail        int
 	LogsSince       string
 	RefreshInterval time.Duration
+	// Ignore hides resources whose name contains any of these substrings.
+	Ignore []string
+	// LoadProject discovers and parses a Compose file (typically in the working
+	// directory) so the Services panel can orchestrate a multi-container stack.
+	// A missing file returns a zero Project and nil error; a parse failure
+	// returns the error. It is re-invoked on each refresh so edits apply live.
+	LoadProject func() (compose.Project, error)
 }
 
 type CustomCommand struct {
@@ -233,24 +233,29 @@ type Model struct {
 
 	active          resourceKind
 	containerCursor int
+	serviceCursor   int
 	imageCursor     int
 	volumeCursor    int
 	networkCursor   int
 	machineCursor   int
 	registryCursor  int
 
-	containers     []containercli.Container
-	images         []containercli.Image
-	volumes        []containercli.Volume
-	networks       []containercli.NetworkResource
-	machines       []containercli.Machine
-	registries     []containercli.RegistryLogin
-	builder        containercli.BuilderStatus
-	systemUsage    containercli.SystemDiskUsage
-	systemVersions []containercli.SystemVersion
-	stats          []containercli.Stat
-	statHistory    map[string][]statHistorySample
-	system         containercli.SystemStatus
+	containers       []containercli.Container
+	images           []containercli.Image
+	volumes          []containercli.Volume
+	networks         []containercli.NetworkResource
+	machines         []containercli.Machine
+	registries       []containercli.RegistryLogin
+	builder          containercli.BuilderStatus
+	systemUsage      containercli.SystemDiskUsage
+	systemVersions   []containercli.SystemVersion
+	systemDNS        []containercli.SystemDNSDomain
+	systemProperties []containercli.SystemProperty
+	project          compose.Project
+	projectErr       error
+	stats            []containercli.Stat
+	statHistory      map[string][]statHistorySample
+	system           containercli.SystemStatus
 
 	tabIndex     [resourceCount]int
 	bufferKind   bufferKind
@@ -265,6 +270,7 @@ type Model struct {
 	logKey       string
 	logFollow    bool
 	menu         *actionMenu
+	bulkMenu     *bulkMenuState
 	showHelp     bool
 	helpOffset   int
 	filter       string
@@ -288,26 +294,37 @@ type Model struct {
 	loadConfig      func() ([]CustomCommand, error)
 	reloadConfig    func() (Options, error)
 	openLink        func(string) (*exec.Cmd, error)
+	loadProject     func() (compose.Project, error)
 	logsTail        int
 	logsSince       string
 	screenMode      screenMode
 	sidePanelWidth  float64
+	ignore          []string
 }
 
 type snapshotMsg struct {
-	system         containercli.SystemStatus
-	containers     []containercli.Container
-	images         []containercli.Image
-	volumes        []containercli.Volume
-	networks       []containercli.NetworkResource
-	machines       []containercli.Machine
-	registries     []containercli.RegistryLogin
-	builder        containercli.BuilderStatus
-	systemUsage    containercli.SystemDiskUsage
-	systemVersions []containercli.SystemVersion
-	stats          []containercli.Stat
-	err            error
-	updated        time.Time
+	system           containercli.SystemStatus
+	containers       []containercli.Container
+	images           []containercli.Image
+	volumes          []containercli.Volume
+	networks         []containercli.NetworkResource
+	machines         []containercli.Machine
+	registries       []containercli.RegistryLogin
+	builder          containercli.BuilderStatus
+	systemUsage      containercli.SystemDiskUsage
+	systemVersions   []containercli.SystemVersion
+	systemDNS        []containercli.SystemDNSDomain
+	systemProperties []containercli.SystemProperty
+	// systemDNSOK / systemPropsOK record whether the best-effort fetch
+	// succeeded, so a transient failure leaves the last-known values in place
+	// rather than blanking the System pane.
+	systemDNSOK   bool
+	systemPropsOK bool
+	project       compose.Project
+	projectErr    error
+	stats         []containercli.Stat
+	err           error
+	updated       time.Time
 }
 
 type outputMsg struct {
@@ -343,16 +360,30 @@ const defaultRefreshInterval = 5 * time.Second
 const maxStatHistorySamples = 120
 
 type statHistorySample struct {
-	cpuPercent   float64
-	hasCPU       bool
+	at time.Time
+
+	// Derived instantaneous values, computed from deltas against the previous
+	// sample. Apple's `container stats` reports cumulative counters
+	// (cpuUsageUsec, networkRx/TxBytes, blockRead/WriteBytes), so a live
+	// CPU%/throughput only exists once two samples can be differenced.
+	cpuPercent  float64
+	hasCPU      bool
+	networkRate float64 // bytes/sec
+	hasNetwork  bool
+	blockRate   float64 // bytes/sec
+	hasBlock    bool
+
+	// memoryBytes is an instantaneous gauge in the raw stat, used as-is.
+	memoryBytes float64
+	hasMemory   bool
+
+	// Raw cumulative counters retained so the next sample can difference them.
 	cpuTimeUsec  float64
 	hasCPUTime   bool
-	memoryBytes  float64
-	hasMemory    bool
-	networkBytes float64
-	hasNetwork   bool
-	blockBytes   float64
-	hasBlock     bool
+	networkTotal float64
+	hasNetTotal  bool
+	blockTotal   float64
+	hasBlkTotal  bool
 }
 
 func New(client Client) Model {
@@ -370,11 +401,21 @@ func NewWithOptions(client Client, opts Options) Model {
 	if opts.RefreshInterval > 0 {
 		refresh = opts.RefreshInterval
 	}
+	// Load the Compose project once up front so the Services panel is populated
+	// before the first refresh lands.
+	var project compose.Project
+	var projectErr error
+	if opts.LoadProject != nil {
+		project, projectErr = opts.LoadProject()
+	}
 	return Model{
 		client:          client,
 		statusLine:      statusLine,
 		autoRefresh:     true,
 		refreshInterval: refresh,
+		project:         project,
+		projectErr:      projectErr,
+		loadProject:     opts.LoadProject,
 		customCommands:  commands,
 		configPath:      opts.ConfigPath,
 		openConfig:      opts.OpenConfigCommand,
@@ -385,7 +426,20 @@ func NewWithOptions(client Client, opts Options) Model {
 		logsSince:       opts.LogsSince,
 		screenMode:      parseScreenMode(opts.ScreenMode),
 		sidePanelWidth:  opts.SidePanelWidth,
+		ignore:          normalizeIgnore(opts.Ignore),
 	}
+}
+
+// normalizeIgnore lowercases and trims the configured ignore patterns once (and
+// drops empties), so isIgnored can match without re-normalizing per render.
+func normalizeIgnore(patterns []string) []string {
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern = strings.ToLower(strings.TrimSpace(pattern)); pattern != "" {
+			out = append(out, pattern)
+		}
+	}
+	return out
 }
 
 // applyReloadedOptions reapplies commands, theme, and gui/log settings after
@@ -397,6 +451,7 @@ func (m *Model) applyReloadedOptions(opts Options) {
 	m.sidePanelWidth = opts.SidePanelWidth
 	m.logsTail = opts.LogsTail
 	m.logsSince = opts.LogsSince
+	m.ignore = normalizeIgnore(opts.Ignore)
 	if opts.RefreshInterval > 0 {
 		m.refreshInterval = opts.RefreshInterval
 	}
@@ -435,8 +490,18 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.builder = msg.builder
 		m.systemUsage = msg.systemUsage
 		m.systemVersions = msg.systemVersions
+		// Keep the last-known DNS/properties when a best-effort fetch failed, so
+		// a transient error doesn't flicker the System pane to empty.
+		if msg.systemDNSOK {
+			m.systemDNS = msg.systemDNS
+		}
+		if msg.systemPropsOK {
+			m.systemProperties = msg.systemProperties
+		}
+		m.project = msg.project
+		m.projectErr = msg.projectErr
 		m.stats = msg.stats
-		m.recordStatHistory(msg.stats)
+		m.recordStatHistory(msg.stats, msg.updated)
 		m.pruneStatHistory(msg.containers)
 		m.err = msg.err
 		m.lastUpdated = msg.updated
@@ -551,120 +616,12 @@ type viewLayout struct {
 	sidebar sidebarRender
 }
 
-func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.confirm != nil || m.prompt != promptNone || m.filtering {
-		return m, nil
-	}
-
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		if m.mouseInPanel(msg) {
-			m.scrollPanel(-3)
-			return m, nil
-		} else if m.mouseInSidebar(msg) {
-			m.moveSelection(-1)
-			cmd := m.ensureMainPanelCmd()
-			return m, cmd
-		}
-		return m, nil
-	case tea.MouseButtonWheelDown:
-		if m.mouseInPanel(msg) {
-			m.scrollPanel(3)
-			return m, nil
-		} else if m.mouseInSidebar(msg) {
-			m.moveSelection(1)
-			cmd := m.ensureMainPanelCmd()
-			return m, cmd
-		}
-		return m, nil
-	case tea.MouseButtonLeft:
-		if msg.Action != tea.MouseActionPress {
-			return m, nil
-		}
-		if kind, ok := m.tabAt(msg.X, msg.Y); ok {
-			if m.active != kind {
-				m.active = kind
-				m.clampCursors()
-				m.resetPanel()
-				m.statusLine = "selected " + resourceLabel(kind)
-				cmd := m.ensureMainPanelCmd()
-				return m, cmd
-			}
-			return m, nil
-		}
-		if index, ok := m.listIndexAt(msg.X, msg.Y); ok {
-			if m.setActiveVisibleIndex(index) {
-				m.resetPanel()
-				m.statusLine = "selected " + resourceLabel(m.active)
-				cmd := m.ensureMainPanelCmd()
-				return m, cmd
-			}
-			return m, nil
-		}
-	}
-	return m, nil
-}
-
-func (m Model) mouseInSidebar(msg tea.MouseMsg) bool {
-	layout, ok := m.viewLayout()
-	return ok &&
-		msg.X >= 0 && msg.X < layout.sidebarWidth &&
-		msg.Y >= layout.bodyTop && msg.Y < layout.bodyTop+layout.bodyHeight
-}
-
-func (m Model) mouseInPanel(msg tea.MouseMsg) bool {
-	layout, ok := m.viewLayout()
-	return ok &&
-		msg.X >= layout.panelX && msg.X < m.width &&
-		msg.Y >= layout.bodyTop && msg.Y < layout.bodyTop+layout.bodyHeight
-}
-
-// tabAt maps a click to the resource section whose header sits on that row.
-// Each stacked panel header is one row, so a click anywhere along it focuses
-// that section.
-func (m Model) tabAt(x int, y int) (resourceKind, bool) {
-	layout, ok := m.viewLayout()
-	if !ok || layout.sidebarWidth <= 0 || x < layout.sidebarContentX || x >= layout.sidebarWidth-1 {
-		return resourceContainers, false
-	}
-	row := y - layout.sidebarContentY
-	if row < 0 {
-		return resourceContainers, false
-	}
-	for kind, headerRow := range layout.sidebar.headerRow {
-		if row == headerRow {
-			return kind, true
-		}
-	}
-	return resourceContainers, false
-}
-
-func (m Model) listIndexAt(x int, y int) (int, bool) {
-	layout, ok := m.viewLayout()
-	if !ok || x < layout.sidebarContentX || x >= layout.sidebarWidth-1 {
-		return 0, false
-	}
-	row := y - layout.listFirstRowY
-	if row < 0 || row >= layout.sidebar.listRows {
-		return 0, false
-	}
-
-	total := m.activeVisibleCount()
-	if total == 0 {
-		return 0, false
-	}
-	start := visibleStart(m.activeCursor(), layout.listDataHeight, total)
-	index := start + row
-	if index < 0 || index >= total {
-		return 0, false
-	}
-	return index, true
-}
-
 func (m Model) activeCursor() int {
 	switch m.active {
 	case resourceContainers:
 		return m.containerCursor
+	case resourceServices:
+		return m.serviceCursor
 	case resourceImages:
 		return m.imageCursor
 	case resourceVolumes:
@@ -684,6 +641,8 @@ func (m Model) activeVisibleCount() int {
 	switch m.active {
 	case resourceContainers:
 		return len(m.filteredContainerIndexes())
+	case resourceServices:
+		return len(m.filteredServiceIndexes())
 	case resourceImages:
 		return len(m.filteredImageIndexes())
 	case resourceBuilder:
@@ -710,6 +669,11 @@ func (m *Model) setActiveVisibleIndex(index int) bool {
 			return false
 		}
 		m.containerCursor = index
+	case resourceServices:
+		if index < 0 || index >= len(m.filteredServiceIndexes()) {
+			return false
+		}
+		m.serviceCursor = index
 	case resourceImages:
 		if index < 0 || index >= len(m.filteredImageIndexes()) {
 			return false
@@ -749,6 +713,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	if m.menu != nil {
 		return m.handleMenuKey(msg)
+	}
+	if m.bulkMenu != nil {
+		return m.handleBulkMenuKey(msg)
 	}
 	if m.showHelp {
 		return m.handleHelpKey(msg)
@@ -792,6 +759,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startFiltering(), nil
 	}
 
+	// The Services pane owns a handful of keys (lifecycle, up/down, recreate);
+	// delegate to its handler first and let everything else fall through to the
+	// global keys below.
+	if m.active == resourceServices {
+		if model, cmd, handled := m.handleServiceKey(key); handled {
+			return model, cmd
+		}
+	}
+
 	switch key {
 	case "?":
 		m.showHelp = true
@@ -799,6 +775,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case " ", "space":
 		return m.openActionMenu()
+	case "B":
+		return m.openBulkMenu()
 	case ":":
 		return m.startContainerCommandPrompt(), nil
 	case ";":
@@ -813,6 +791,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetPanel()
 		cmd := m.ensureMainPanelCmd()
 		return m, cmd
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		return m.jumpToResource(resourceKind(key[0] - '1'))
 	case "[":
 		cmd := m.cycleTab(-1)
 		return m, cmd
@@ -901,6 +881,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.logsSelected()
 	case "f":
 		return m.followLogsSelected()
+	case "ctrl+b":
+		return m.bootLogsSelected()
 	case "e":
 		return m.shellSelected()
 	case "w":
@@ -919,7 +901,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		})
 	case "x":
 		if m.active == resourceSystem {
-			m.confirm = &pendingConfirm{action: confirmStopSystem, label: "Stop all container services?"}
+			m.confirm = &pendingConfirm{label: "Stop all container services?", run: func(ctx context.Context, m Model) (string, error) {
+				return "stopped container services", m.client.StopSystem(ctx)
+			}}
 			return m, nil
 		}
 		if m.active == resourceBuilder {
@@ -938,13 +922,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		switch m.active {
 		case resourceContainers:
-			m.confirm = &pendingConfirm{action: confirmPruneContainers, label: "Prune stopped containers?"}
+			m.confirm = &pendingConfirm{label: "Prune stopped containers?", run: func(ctx context.Context, m Model) (string, error) {
+				return "pruned stopped containers", m.client.PruneContainers(ctx)
+			}}
 		case resourceImages:
-			m.confirm = &pendingConfirm{action: confirmPruneImages, label: "Prune unused images?"}
+			m.confirm = &pendingConfirm{label: "Prune unused images?", run: func(ctx context.Context, m Model) (string, error) {
+				return "pruned unused images", m.client.PruneImages(ctx, false)
+			}}
 		case resourceVolumes:
-			m.confirm = &pendingConfirm{action: confirmPruneVolumes, label: "Prune unused volumes?"}
+			m.confirm = &pendingConfirm{label: "Prune unused volumes?", run: func(ctx context.Context, m Model) (string, error) {
+				return "pruned unused volumes", m.client.PruneVolumes(ctx)
+			}}
 		case resourceNetworks:
-			m.confirm = &pendingConfirm{action: confirmPruneNetworks, label: "Prune unused networks?"}
+			m.confirm = &pendingConfirm{label: "Prune unused networks?", run: func(ctx context.Context, m Model) (string, error) {
+				return "pruned unused networks", m.client.PruneNetworks(ctx)
+			}}
 		}
 		return m, nil
 	}
@@ -1163,6 +1155,78 @@ func (m Model) startCreateResourcePrompt() (tea.Model, tea.Cmd) {
 		m.statusLine = "create network"
 	}
 	return m, nil
+}
+
+// bootLogsSelected shows the VM boot logs for the selected container or
+// machine in the output buffer — an Apple-specific diagnostic since each
+// container/machine boots its own lightweight VM.
+func (m Model) bootLogsSelected() (tea.Model, tea.Cmd) {
+	lines := m.logTail()
+	switch m.active {
+	case resourceContainers:
+		container, ok := m.selectedContainer()
+		if !ok {
+			return m, nil
+		}
+		id := container.Name()
+		m.busy = "loading boot logs for " + id
+		m.statusLine = m.busy
+		return m, m.containerBootLogsCmd(id, lines)
+	case resourceServices:
+		service, ok := m.selectedService()
+		if !ok {
+			return m, nil
+		}
+		container, ok := m.serviceContainer(service)
+		if !ok {
+			m.statusLine = service.Name + " has no container yet — press u to bring it up"
+			return m, nil
+		}
+		id := container.Name()
+		m.busy = "loading boot logs for " + id
+		m.statusLine = m.busy
+		return m, m.containerBootLogsCmd(id, lines)
+	case resourceMachines:
+		machine, ok := m.selectedMachine()
+		if !ok {
+			return m, nil
+		}
+		id := machine.Name()
+		m.busy = "loading boot logs for " + id
+		m.statusLine = m.busy
+		return m, func() tea.Msg {
+			body, err := m.client.MachineBootLogs(context.Background(), id, lines)
+			if strings.TrimSpace(body) == "" && err == nil {
+				body = "No boot log output."
+			}
+			return outputMsg{title: "Boot logs " + id, body: body, err: err}
+		}
+	}
+	return m, nil
+}
+
+// containerBootLogsCmd fetches a container's VM boot logs into the output buffer.
+func (m Model) containerBootLogsCmd(id string, lines int) tea.Cmd {
+	return func() tea.Msg {
+		body, err := m.client.BootLogs(context.Background(), id, lines)
+		if strings.TrimSpace(body) == "" && err == nil {
+			body = "No boot log output."
+		}
+		return outputMsg{title: "Boot logs " + id, body: body, err: err}
+	}
+}
+
+// jumpToResource focuses a resource pane directly by index (the 1-9 number
+// keys), mirroring lazydocker's numbered side panels.
+func (m Model) jumpToResource(kind resourceKind) (tea.Model, tea.Cmd) {
+	if kind < 0 || kind >= resourceCount || kind == m.active {
+		return m, nil
+	}
+	m.active = kind
+	m.clampCursors()
+	m.resetPanel()
+	m.statusLine = "selected " + resourceLabel(kind)
+	return m, m.ensureMainPanelCmd()
 }
 
 func (m Model) startFiltering() Model {
@@ -1950,6 +2014,22 @@ func (m Model) refreshCmd() tea.Cmd {
 		} else {
 			msg.systemVersions = versions
 		}
+		// DNS domains and system properties are best-effort: they are newer
+		// subcommands, so an error (older CLI) must not surface as a failure. The
+		// OK flags let the snapshot handler keep the last-known values on a
+		// transient error instead of clobbering them with an empty slice.
+		if domains, err := m.client.SystemDNS(ctx); err == nil {
+			msg.systemDNS = domains
+			msg.systemDNSOK = true
+		}
+		if properties, err := m.client.SystemProperties(ctx); err == nil {
+			msg.systemProperties = properties
+			msg.systemPropsOK = true
+		}
+		// Re-read the Compose file each refresh so edits apply live.
+		if m.loadProject != nil {
+			msg.project, msg.projectErr = m.loadProject()
+		}
 		if containers, err := m.client.Containers(ctx); err != nil {
 			errs = append(errs, err)
 		} else {
@@ -2102,6 +2182,18 @@ func (m Model) followLogsCommandForSelection() (string, *exec.Cmd, error) {
 		id := container.Name()
 		cmd, err := m.client.FollowLogsCommand(id, 200)
 		return id, cmd, err
+	case resourceServices:
+		service, ok := m.selectedService()
+		if !ok {
+			return "", nil, nil
+		}
+		container, ok := m.serviceContainer(service)
+		if !ok {
+			return "", nil, nil
+		}
+		id := container.Name()
+		cmd, err := m.client.FollowLogsCommand(id, 200)
+		return id, cmd, err
 	case resourceMachines:
 		machine, ok := m.selectedMachine()
 		if !ok {
@@ -2132,11 +2224,16 @@ func (m Model) shellSelected() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	id := container.Name()
 	if container.State() != "running" {
-		m.statusLine = "start " + id + " before opening a shell"
+		m.statusLine = "start " + container.Name() + " before opening a shell"
 		return m, nil
 	}
+	return m.shellForContainer(container.Name())
+}
+
+// shellForContainer opens an interactive /bin/sh in the named container,
+// suspending the TUI until the shell exits. Shared by container and service shells.
+func (m Model) shellForContainer(id string) (tea.Model, tea.Cmd) {
 	cmd, err := m.client.ShellCommand(id, "/bin/sh")
 	if err != nil {
 		m.err = err
@@ -2361,17 +2458,23 @@ func (m *Model) prepareDelete() {
 		container, ok := m.selectedContainer()
 		if ok {
 			id := container.Name()
-			m.confirm = &pendingConfirm{action: confirmDeleteContainer, target: id, label: "Delete container " + id + "?"}
+			m.confirm = &pendingConfirm{label: "Delete container " + id + "?", run: func(ctx context.Context, m Model) (string, error) {
+				return "deleted container " + id, m.client.DeleteContainer(ctx, id, false)
+			}}
 		}
 	case resourceImages:
 		image, ok := m.selectedImage()
 		if ok {
 			name := image.Name()
-			m.confirm = &pendingConfirm{action: confirmDeleteImage, target: name, label: "Delete image " + name + "?"}
+			m.confirm = &pendingConfirm{label: "Delete image " + name + "?", run: func(ctx context.Context, m Model) (string, error) {
+				return "deleted image " + name, m.client.DeleteImage(ctx, name, false)
+			}}
 		}
 	case resourceBuilder:
 		if m.builder.Present {
-			m.confirm = &pendingConfirm{action: confirmDeleteBuilder, target: m.builder.Name(), label: "Delete builder?"}
+			m.confirm = &pendingConfirm{label: "Delete builder?", run: func(ctx context.Context, m Model) (string, error) {
+				return "deleted builder", m.client.DeleteBuilder(ctx, false)
+			}}
 		} else {
 			m.statusLine = "builder is not present"
 		}
@@ -2379,72 +2482,49 @@ func (m *Model) prepareDelete() {
 		volume, ok := m.selectedVolume()
 		if ok {
 			name := volume.Name()
-			m.confirm = &pendingConfirm{action: confirmDeleteVolume, target: name, label: "Delete volume " + name + "?"}
+			m.confirm = &pendingConfirm{label: "Delete volume " + name + "?", run: func(ctx context.Context, m Model) (string, error) {
+				return "deleted volume " + name, m.client.DeleteVolume(ctx, name)
+			}}
 		}
 	case resourceNetworks:
 		network, ok := m.selectedNetwork()
 		if ok {
 			name := network.Name()
-			m.confirm = &pendingConfirm{action: confirmDeleteNetwork, target: name, label: "Delete network " + name + "?"}
+			m.confirm = &pendingConfirm{label: "Delete network " + name + "?", run: func(ctx context.Context, m Model) (string, error) {
+				return "deleted network " + name, m.client.DeleteNetwork(ctx, name)
+			}}
 		}
 	case resourceMachines:
 		machine, ok := m.selectedMachine()
 		if ok {
 			id := machine.Name()
-			m.confirm = &pendingConfirm{action: confirmDeleteMachine, target: id, label: "Delete machine " + id + "?"}
+			m.confirm = &pendingConfirm{label: "Delete machine " + id + "?", run: func(ctx context.Context, m Model) (string, error) {
+				return "deleted machine " + id, m.client.DeleteMachine(ctx, id)
+			}}
 		}
 	case resourceRegistries:
 		registry, ok := m.selectedRegistry()
 		if ok {
 			name := registry.Name()
-			m.confirm = &pendingConfirm{action: confirmLogoutRegistry, target: name, label: "Log out from registry " + name + "?"}
+			m.confirm = &pendingConfirm{label: "Log out from registry " + name + "?", run: func(ctx context.Context, m Model) (string, error) {
+				return "logged out registry " + name, m.client.LogoutRegistry(ctx, name)
+			}}
 		}
 	}
 }
 
+// confirmCmd runs a confirmed action's closure against the current model. Each
+// action defines its own execution where it is created, so this dispatcher has
+// no per-action knowledge.
 func (m Model) confirmCmd(confirm pendingConfirm) tea.Cmd {
+	run := confirm.run
+	model := m
 	return func() tea.Msg {
-		ctx := context.Background()
-		switch confirm.action {
-		case confirmDeleteContainer:
-			err := m.client.DeleteContainer(ctx, confirm.target, false)
-			return actionDoneMsg{message: "deleted container " + confirm.target, err: err}
-		case confirmPruneContainers:
-			err := m.client.PruneContainers(ctx)
-			return actionDoneMsg{message: "pruned stopped containers", err: err}
-		case confirmDeleteImage:
-			err := m.client.DeleteImage(ctx, confirm.target, false)
-			return actionDoneMsg{message: "deleted image " + confirm.target, err: err}
-		case confirmPruneImages:
-			err := m.client.PruneImages(ctx, false)
-			return actionDoneMsg{message: "pruned unused images", err: err}
-		case confirmDeleteVolume:
-			err := m.client.DeleteVolume(ctx, confirm.target)
-			return actionDoneMsg{message: "deleted volume " + confirm.target, err: err}
-		case confirmDeleteNetwork:
-			err := m.client.DeleteNetwork(ctx, confirm.target)
-			return actionDoneMsg{message: "deleted network " + confirm.target, err: err}
-		case confirmPruneVolumes:
-			err := m.client.PruneVolumes(ctx)
-			return actionDoneMsg{message: "pruned unused volumes", err: err}
-		case confirmPruneNetworks:
-			err := m.client.PruneNetworks(ctx)
-			return actionDoneMsg{message: "pruned unused networks", err: err}
-		case confirmDeleteMachine:
-			err := m.client.DeleteMachine(ctx, confirm.target)
-			return actionDoneMsg{message: "deleted machine " + confirm.target, err: err}
-		case confirmLogoutRegistry:
-			err := m.client.LogoutRegistry(ctx, confirm.target)
-			return actionDoneMsg{message: "logged out registry " + confirm.target, err: err}
-		case confirmDeleteBuilder:
-			err := m.client.DeleteBuilder(ctx, false)
-			return actionDoneMsg{message: "deleted builder", err: err}
-		case confirmStopSystem:
-			err := m.client.StopSystem(ctx)
-			return actionDoneMsg{message: "stopped container services", err: err}
-		default:
-			return actionDoneMsg{err: errors.New("unknown action")}
+		if run == nil {
+			return actionDoneMsg{err: errors.New("no action to confirm")}
 		}
+		message, err := run(context.Background(), model)
+		return actionDoneMsg{message: message, err: err}
 	}
 }
 
@@ -2452,6 +2532,8 @@ func (m *Model) moveSelection(delta int) {
 	switch m.active {
 	case resourceContainers:
 		m.containerCursor += delta
+	case resourceServices:
+		m.serviceCursor += delta
 	case resourceImages:
 		m.imageCursor += delta
 	case resourceVolumes:
@@ -2469,6 +2551,7 @@ func (m *Model) moveSelection(delta int) {
 
 func (m *Model) clampCursors() {
 	m.containerCursor = clamp(m.containerCursor, 0, len(m.filteredContainerIndexes())-1)
+	m.serviceCursor = clamp(m.serviceCursor, 0, len(m.filteredServiceIndexes())-1)
 	m.imageCursor = clamp(m.imageCursor, 0, len(m.filteredImageIndexes())-1)
 	m.volumeCursor = clamp(m.volumeCursor, 0, len(m.filteredVolumeIndexes())-1)
 	m.networkCursor = clamp(m.networkCursor, 0, len(m.filteredNetworkIndexes())-1)
@@ -2579,6 +2662,9 @@ func (m Model) View() string {
 	if m.menu != nil {
 		return m.renderMenuOverlay()
 	}
+	if m.bulkMenu != nil {
+		return m.renderBulkMenuOverlay()
+	}
 
 	top := m.renderTopBar()
 	footer := m.renderFooter()
@@ -2600,81 +2686,6 @@ func (m Model) View() string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, top, body, footer)
-}
-
-func (m Model) viewLayout() (viewLayout, bool) {
-	if m.width < 60 || m.height < 8 {
-		return viewLayout{}, false
-	}
-	bodyHeight := m.height - 2
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
-	sidebarWidth := m.sidebarWidth()
-	// Header rows live inside the sidebar box: one border row + one (zero)
-	// padding row sit above the first content line, so content starts at Y=2.
-	const contentY = 2
-	sidebar := m.buildSidebar(sidebarWidth, bodyHeight-2)
-	return viewLayout{
-		bodyTop:         1,
-		bodyHeight:      bodyHeight,
-		sidebarWidth:    sidebarWidth,
-		panelX:          sidebarWidth,
-		sidebarContentX: 2,
-		sidebarContentY: contentY,
-		listFirstRowY:   contentY + sidebar.listFirstRow,
-		listDataHeight:  sidebar.listDataHeight,
-		sidebar:         sidebar,
-	}, true
-}
-
-func sidebarWidthFor(width int) int {
-	// Prefer a sidebar in the [44, 72] band, but never starve the main panel:
-	// it must keep at least 28 columns. On narrow terminals the panel minimum
-	// wins, so the sidebar may shrink below 44 (down to a 1-column floor).
-	sidebarWidth := width / 2
-	if sidebarWidth > 72 {
-		sidebarWidth = 72
-	}
-	if sidebarWidth < 44 {
-		sidebarWidth = 44
-	}
-	if sidebarWidth > width-28 {
-		sidebarWidth = width - 28
-	}
-	if sidebarWidth < 1 {
-		sidebarWidth = 1
-	}
-	return sidebarWidth
-}
-
-// sidebarWidth is the current sidebar width for the active screen mode.
-// Fullscreen hides the sidebar; half mode narrows it to widen the main panel.
-func (m Model) sidebarWidth() int {
-	switch m.screenMode {
-	case screenFull:
-		return 0
-	case screenHalf:
-		return clampSidebar(m.width/4, m.width, 24)
-	default:
-		if m.sidePanelWidth > 0 && m.sidePanelWidth < 1 {
-			return clampSidebar(int(float64(m.width)*m.sidePanelWidth), m.width, 30)
-		}
-		return sidebarWidthFor(m.width)
-	}
-}
-
-func clampSidebar(w int, total int, min int) int {
-	if w < min {
-		w = min
-	}
-	if w > total-28 {
-		w = total - 28
-	}
-	if w < 0 {
-		w = 0
-	}
-	return w
 }
 
 // applyTheme overrides panel borders and accent colours from config. It mutates
@@ -2842,6 +2853,8 @@ func (m Model) footerKeyHints() [][2]string {
 	switch m.active {
 	case resourceContainers:
 		pairs = append(pairs, [2]string{"s", "start"}, [2]string{"x", "stop"}, [2]string{"l", "logs"}, [2]string{"e", "shell"})
+	case resourceServices:
+		pairs = append(pairs, [2]string{"u", "up"}, [2]string{"d", "down"}, [2]string{"R", "recreate"}, [2]string{"l", "logs"})
 	case resourceImages:
 		pairs = append(pairs, [2]string{"a", "pull"}, [2]string{"R", "run"}, [2]string{"b", "build"})
 	case resourceVolumes, resourceNetworks:
@@ -3036,6 +3049,15 @@ func (m Model) selectedResourceName() string {
 		if container, ok := m.selectedContainer(); ok {
 			return container.Name()
 		}
+	case resourceServices:
+		if service, ok := m.selectedService(); ok {
+			// Prefer the backing container name so {resource}/{container}
+			// placeholders target something runnable.
+			if container, ok := m.serviceContainer(service); ok {
+				return container.Name()
+			}
+			return m.project.ContainerNameFor(service)
+		}
 	case resourceImages:
 		if image, ok := m.selectedImage(); ok {
 			return image.Name()
@@ -3097,79 +3119,13 @@ type sidebarRender struct {
 	listDataHeight int                  // paging capacity used to window the focused list
 }
 
-func sidebarOrder() []resourceKind {
-	return []resourceKind{
-		resourceContainers, resourceImages, resourceBuilder, resourceVolumes,
-		resourceNetworks, resourceMachines, resourceRegistries, resourceSystem,
-	}
-}
-
-// buildSidebar lays out the lazydocker-style stacked sidebar: every resource is
-// a titled section header, and the focused section expands to show its list.
-// contentHeight is the room inside the sidebar box (border + padding excluded).
-func (m Model) buildSidebar(width int, contentHeight int) sidebarRender {
-	order := sidebarOrder()
-	innerWidth := width - 4 // box border (2 cols) + horizontal padding (2 cols)
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-	// Every section costs one header row; the focused section gets the rest.
-	listRegion := contentHeight - len(order)
-	if listRegion < 0 {
-		listRegion = 0
-	}
-	out := sidebarRender{
-		headerRow:      make(map[resourceKind]int, len(order)),
-		listFirstRow:   -1,
-		listDataHeight: listRegion - 1,
-	}
-	if out.listDataHeight < 0 {
-		out.listDataHeight = 0
-	}
-	for _, kind := range order {
-		out.headerRow[kind] = len(out.lines)
-		out.lines = append(out.lines, m.renderSidebarHeader(kind, innerWidth))
-		if kind != m.active || listRegion < 1 {
-			continue
-		}
-		items := m.renderActiveList(kind, innerWidth, listRegion)
-		for idx, row := range items {
-			if idx == 1 {
-				out.listFirstRow = len(out.lines)
-			}
-			out.lines = append(out.lines, row)
-		}
-		if len(items) > 1 {
-			out.listRows = len(items) - 1
-		}
-		if out.listFirstRow == -1 {
-			out.listFirstRow = len(out.lines)
-		}
-	}
-	if out.listFirstRow == -1 {
-		out.listFirstRow = len(out.lines)
-	}
-	// Never overflow the box height (extreme small terminals).
-	if len(out.lines) > contentHeight {
-		out.lines = out.lines[:contentHeight]
-	}
-	return out
-}
-
-func (m Model) renderSidebar(width int, height int) string {
-	style := activePanelStyle.Width(width - 2).Height(height - 2)
-	sb := m.buildSidebar(width, height-2)
-	return style.Render(strings.Join(sb.lines, "\n"))
-}
-
 // renderActiveList renders the item list for the focused section.
 func (m Model) renderActiveList(kind resourceKind, width int, height int) []string {
 	switch kind {
 	case resourceContainers:
 		return m.renderContainerList(width, height)
+	case resourceServices:
+		return m.renderServiceList(width, height)
 	case resourceImages:
 		return m.renderImageList(width, height)
 	case resourceBuilder:
@@ -3188,72 +3144,6 @@ func (m Model) renderActiveList(kind resourceKind, width int, height int) []stri
 	return nil
 }
 
-// renderSidebarHeader draws one stacked-panel title bar. The focused section
-// gets an accent bar + bold accent title; the rest stay muted.
-func (m Model) renderSidebarHeader(kind resourceKind, width int) string {
-	if width < 4 {
-		return truncate(sidebarTitle(kind), width)
-	}
-	title := sidebarTitle(kind)
-	if count := m.sidebarCountLabel(kind); count != "" {
-		title += " (" + count + ")"
-	}
-	body := truncate(title, width-2)
-	if kind == m.active {
-		return sidebarBarStyle.Render("▌ ") + sidebarActiveStyle.Render(body)
-	}
-	return "  " + sidebarHeaderStyle.Render(body)
-}
-
-func sidebarTitle(kind resourceKind) string {
-	switch kind {
-	case resourceContainers:
-		return "Containers"
-	case resourceImages:
-		return "Images"
-	case resourceBuilder:
-		return "Builder"
-	case resourceVolumes:
-		return "Volumes"
-	case resourceNetworks:
-		return "Networks"
-	case resourceMachines:
-		return "Machines"
-	case resourceRegistries:
-		return "Registries"
-	case resourceSystem:
-		return "System"
-	default:
-		return "Resource"
-	}
-}
-
-// sidebarCountLabel is the parenthetical shown beside a section title: a count
-// (filtered/total when a filter hides rows) for list resources, or a state for
-// the singleton builder/system sections.
-func (m Model) sidebarCountLabel(kind resourceKind) string {
-	switch kind {
-	case resourceContainers:
-		return m.countLabel(len(m.filteredContainerIndexes()), len(m.containers))
-	case resourceImages:
-		return m.countLabel(len(m.filteredImageIndexes()), len(m.images))
-	case resourceBuilder:
-		return emptyDash(m.builder.State())
-	case resourceVolumes:
-		return m.countLabel(len(m.filteredVolumeIndexes()), len(m.volumes))
-	case resourceNetworks:
-		return m.countLabel(len(m.filteredNetworkIndexes()), len(m.networks))
-	case resourceMachines:
-		return m.countLabel(len(m.filteredMachineIndexes()), len(m.machines))
-	case resourceRegistries:
-		return m.countLabel(len(m.filteredRegistryIndexes()), len(m.registries))
-	case resourceSystem:
-		return emptyDash(m.system.Status)
-	default:
-		return ""
-	}
-}
-
 func (m Model) countLabel(filtered int, total int) string {
 	if activeFilter(m.filter) == "" || filtered == total {
 		return strconv.Itoa(total)
@@ -3265,6 +3155,8 @@ func resourceLabel(kind resourceKind) string {
 	switch kind {
 	case resourceContainers:
 		return "containers"
+	case resourceServices:
+		return "services"
 	case resourceImages:
 		return "images"
 	case resourceBuilder:
@@ -3525,296 +3417,23 @@ func (m Model) panelContent() (string, string) {
 	return m.tabContent(now)
 }
 
-func (m Model) statLines(containerID string) []string {
-	for _, stat := range m.stats {
-		if !statMatches(stat, containerID) {
-			continue
-		}
-		if lines := stat.SummaryLines(); len(lines) > 0 {
-			if historyLines := m.statHistoryLines(containerID); len(historyLines) > 0 {
-				lines = append(lines, "")
-				lines = append(lines, historyLines...)
-			}
-			return lines
-		}
-		keys := make([]string, 0, len(stat))
-		for key := range stat {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		lines := make([]string, 0, len(keys))
-		for _, key := range keys {
-			lines = append(lines, fmt.Sprintf("  %s: %v", key, stat[key]))
-		}
-		if historyLines := m.statHistoryLines(containerID); len(historyLines) > 0 {
-			lines = append(lines, "")
-			lines = append(lines, historyLines...)
-		}
-		return lines
-	}
-	return m.statHistoryLines(containerID)
-}
-
-func (m Model) statListSummary(containerID string) string {
-	for _, stat := range m.stats {
-		if !statMatches(stat, containerID) {
-			continue
-		}
-		return stat.ListSummary()
-	}
-	return ""
-}
-
-func (m *Model) recordStatHistory(stats []containercli.Stat) {
-	if len(stats) == 0 {
-		return
-	}
-	if m.statHistory == nil {
-		m.statHistory = map[string][]statHistorySample{}
-	}
-	for _, stat := range stats {
-		id := statIdentifier(stat)
-		if id == "" {
-			continue
-		}
-		sample, ok := statHistorySampleFromStat(stat)
-		if !ok {
-			continue
-		}
-		samples := append(m.statHistory[id], sample)
-		if len(samples) > maxStatHistorySamples {
-			samples = samples[len(samples)-maxStatHistorySamples:]
-		}
-		m.statHistory[id] = samples
-	}
-}
-
-func (m *Model) pruneStatHistory(containers []containercli.Container) {
-	if len(m.statHistory) == 0 || len(containers) == 0 {
-		return
-	}
-	known := make(map[string]struct{}, len(containers))
-	for _, container := range containers {
-		if name := strings.TrimSpace(container.Name()); name != "" {
-			known[name] = struct{}{}
-		}
-		if id := strings.TrimSpace(container.ID); id != "" {
-			known[id] = struct{}{}
-		}
-	}
-	for id := range m.statHistory {
-		if _, ok := known[id]; ok {
-			continue
-		}
-		matchesContainer := false
-		for knownID := range known {
-			if strings.Contains(id, knownID) || strings.Contains(knownID, id) {
-				matchesContainer = true
-				break
-			}
-		}
-		if !matchesContainer {
-			delete(m.statHistory, id)
-		}
-	}
-}
-
-func statIdentifier(stat containercli.Stat) string {
-	for _, key := range []string{"id", "ID", "container", "Container", "containerID", "containerId", "name", "Name"} {
-		value, ok := stat[key]
-		if !ok {
-			continue
-		}
-		id := strings.TrimSpace(fmt.Sprint(value))
-		if id != "" {
-			return id
-		}
-	}
-	return ""
-}
-
-func statHistorySampleFromStat(stat containercli.Stat) (statHistorySample, bool) {
-	sample := statHistorySample{}
-	if cpuPercent, ok := firstStatNumber(stat, "cpuPercent", "cpuPercentage", "cpuPercentUsage"); ok {
-		sample.cpuPercent = cpuPercent
-		sample.hasCPU = true
-	}
-	if cpuUsec, ok := statNumber(stat, "cpuUsageUsec"); ok {
-		sample.cpuTimeUsec = cpuUsec
-		sample.hasCPUTime = true
-	}
-	if memory, ok := statNumber(stat, "memoryUsageBytes"); ok {
-		sample.memoryBytes = memory
-		sample.hasMemory = true
-	}
-	rx, hasRx := statNumber(stat, "networkRxBytes")
-	tx, hasTx := statNumber(stat, "networkTxBytes")
-	if hasRx || hasTx {
-		sample.networkBytes = rx + tx
-		sample.hasNetwork = true
-	}
-	read, hasRead := statNumber(stat, "blockReadBytes")
-	write, hasWrite := statNumber(stat, "blockWriteBytes")
-	if hasRead || hasWrite {
-		sample.blockBytes = read + write
-		sample.hasBlock = true
-	}
-	return sample, sample.hasCPU || sample.hasCPUTime || sample.hasMemory || sample.hasNetwork || sample.hasBlock
-}
-
-func firstStatNumber(stat containercli.Stat, keys ...string) (float64, bool) {
-	for _, key := range keys {
-		if value, ok := statNumber(stat, key); ok {
-			return value, true
-		}
-	}
-	return 0, false
-}
-
-func statNumber(stat containercli.Stat, key string) (float64, bool) {
-	value, ok := stat[key]
-	if !ok {
-		return 0, false
-	}
-	switch v := value.(type) {
-	case float64:
-		return v, true
-	case float32:
-		return float64(v), true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case int32:
-		return float64(v), true
-	case jsonNumber:
-		number, err := v.Float64()
-		return number, err == nil
-	default:
-		return 0, false
-	}
-}
+// minDerivationInterval is the smallest sample gap that yields a meaningful
+// rate. Two refreshes close together (e.g. an auto-refresh immediately followed
+// by a manual `r`) land a few milliseconds apart, and dividing a counter delta
+// by that tiny interval would spike CPU%/throughput with pure timing noise.
+const minDerivationInterval = 500 * time.Millisecond
 
 type jsonNumber interface {
 	Float64() (float64, error)
-}
-
-func (m Model) statHistoryLines(containerID string) []string {
-	samples := m.statHistoryForContainer(containerID)
-	if len(samples) < 2 {
-		return nil
-	}
-	lines := []string{fmt.Sprintf("  History:  last %d samples", len(samples))}
-	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
-		if sample.hasCPU {
-			return sample.cpuPercent, true
-		}
-		return 0, false
-	}); ok {
-		lines = append(lines, fmt.Sprintf("  CPU %%:    %s", asciiSparkline(values)))
-	} else if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
-		if sample.hasCPUTime {
-			return sample.cpuTimeUsec, true
-		}
-		return 0, false
-	}); ok {
-		lines = append(lines, fmt.Sprintf("  CPU time: %s", asciiSparkline(values)))
-	}
-	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
-		if sample.hasMemory {
-			return sample.memoryBytes, true
-		}
-		return 0, false
-	}); ok {
-		lines = append(lines, fmt.Sprintf("  Memory:   %s", asciiSparkline(values)))
-	}
-	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
-		if sample.hasNetwork {
-			return sample.networkBytes, true
-		}
-		return 0, false
-	}); ok {
-		lines = append(lines, fmt.Sprintf("  Network:  %s", asciiSparkline(values)))
-	}
-	if values, ok := historyValues(samples, func(sample statHistorySample) (float64, bool) {
-		if sample.hasBlock {
-			return sample.blockBytes, true
-		}
-		return 0, false
-	}); ok {
-		lines = append(lines, fmt.Sprintf("  Block IO: %s", asciiSparkline(values)))
-	}
-	if len(lines) == 1 {
-		return nil
-	}
-	return lines
-}
-
-func (m Model) statHistoryForContainer(containerID string) []statHistorySample {
-	if len(m.statHistory) == 0 || strings.TrimSpace(containerID) == "" {
-		return nil
-	}
-	if samples := m.statHistory[containerID]; len(samples) > 0 {
-		return samples
-	}
-	keys := make([]string, 0, len(m.statHistory))
-	for key := range m.statHistory {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if strings.Contains(key, containerID) || strings.Contains(containerID, key) {
-			return m.statHistory[key]
-		}
-	}
-	return nil
-}
-
-func historyValues(samples []statHistorySample, valueFor func(statHistorySample) (float64, bool)) ([]float64, bool) {
-	values := make([]float64, 0, len(samples))
-	for _, sample := range samples {
-		value, ok := valueFor(sample)
-		if !ok {
-			continue
-		}
-		values = append(values, value)
-	}
-	return values, len(values) >= 2
-}
-
-func asciiSparkline(values []float64) string {
-	if len(values) == 0 {
-		return ""
-	}
-	const marks = ".:-=+*#%@"
-	minimum := values[0]
-	maximum := values[0]
-	for _, value := range values[1:] {
-		minimum = math.Min(minimum, value)
-		maximum = math.Max(maximum, value)
-	}
-	if maximum == minimum {
-		return strings.Repeat("-", len(values))
-	}
-	var out strings.Builder
-	for _, value := range values {
-		ratio := (value - minimum) / (maximum - minimum)
-		index := int(math.Round(ratio * float64(len(marks)-1)))
-		if index < 0 {
-			index = 0
-		}
-		if index >= len(marks) {
-			index = len(marks) - 1
-		}
-		out.WriteByte(marks[index])
-	}
-	return out.String()
 }
 
 func (m Model) filteredContainerIndexes() []int {
 	filter := activeFilter(m.filter)
 	indexes := make([]int, 0, len(m.containers))
 	for idx, container := range m.containers {
+		if m.isIgnored(container.Name(), container.ImageName()) {
+			continue
+		}
 		if filter == "" || matchFields(filter, container.Name(), container.State(), container.ImageName(), container.Ports(), container.Platform()) {
 			indexes = append(indexes, idx)
 		}
@@ -3826,6 +3445,9 @@ func (m Model) filteredImageIndexes() []int {
 	filter := activeFilter(m.filter)
 	indexes := make([]int, 0, len(m.images))
 	for idx, image := range m.images {
+		if m.isIgnored(image.Name()) {
+			continue
+		}
 		if filter == "" || matchFields(filter, image.Name(), image.Digest(), image.Platforms(), image.Size()) {
 			indexes = append(indexes, idx)
 		}
@@ -3849,6 +3471,9 @@ func (m Model) filteredVolumeIndexes() []int {
 	filter := activeFilter(m.filter)
 	indexes := make([]int, 0, len(m.volumes))
 	for idx, volume := range m.volumes {
+		if m.isIgnored(volume.Name()) {
+			continue
+		}
 		if filter == "" || matchFields(filter, volume.Name(), volume.Configuration.Driver, volume.Configuration.Format, volume.Configuration.Source, volume.Size()) {
 			indexes = append(indexes, idx)
 		}
@@ -3860,6 +3485,9 @@ func (m Model) filteredNetworkIndexes() []int {
 	filter := activeFilter(m.filter)
 	indexes := make([]int, 0, len(m.networks))
 	for idx, network := range m.networks {
+		if m.isIgnored(network.Name()) {
+			continue
+		}
 		if filter == "" || matchFields(filter, network.Name(), network.Configuration.Mode, network.Configuration.Plugin, network.Status.IPv4Gateway, network.Status.IPv4Subnet, network.Status.IPv6Subnet) {
 			indexes = append(indexes, idx)
 		}
@@ -3871,6 +3499,9 @@ func (m Model) filteredMachineIndexes() []int {
 	filter := activeFilter(m.filter)
 	indexes := make([]int, 0, len(m.machines))
 	for idx, machine := range m.machines {
+		if m.isIgnored(machine.Name()) {
+			continue
+		}
 		if filter == "" || matchFields(filter, machine.Name(), machine.State(), machine.Image(), machine.CPUs(), machine.Memory()) {
 			indexes = append(indexes, idx)
 		}
@@ -3882,6 +3513,9 @@ func (m Model) filteredRegistryIndexes() []int {
 	filter := activeFilter(m.filter)
 	indexes := make([]int, 0, len(m.registries))
 	for idx, registry := range m.registries {
+		if m.isIgnored(registry.Name()) {
+			continue
+		}
 		if filter == "" || matchFields(filter, registry.Name(), registry.User(), registry.RegistryScheme()) {
 			indexes = append(indexes, idx)
 		}
@@ -3929,17 +3563,20 @@ func matchFields(filter string, fields ...string) bool {
 	return false
 }
 
-func statMatches(stat containercli.Stat, containerID string) bool {
-	if containerID == "" {
+// isIgnored reports whether any of a resource's fields contains a configured
+// `ignore` substring, hiding noisy resources from every list (lazydocker's
+// `ignore`). Patterns are pre-normalized (lowercased, trimmed) by
+// normalizeIgnore, so only each field is lowercased here.
+func (m Model) isIgnored(fields ...string) bool {
+	if len(m.ignore) == 0 {
 		return false
 	}
-	for _, key := range []string{"id", "ID", "container", "Container", "containerID", "containerId", "name", "Name"} {
-		value, ok := stat[key]
-		if !ok {
-			continue
-		}
-		if strings.Contains(fmt.Sprint(value), containerID) || strings.Contains(containerID, fmt.Sprint(value)) {
-			return true
+	for _, field := range fields {
+		field = strings.ToLower(field)
+		for _, pattern := range m.ignore {
+			if strings.Contains(field, pattern) {
+				return true
+			}
 		}
 	}
 	return false
@@ -4005,20 +3642,6 @@ func panelTextHeight(panelHeight int) int {
 		return 1
 	}
 	return height
-}
-
-func visibleStart(cursor int, height int, total int) int {
-	if height <= 0 || total <= height {
-		return 0
-	}
-	start := cursor - height/2
-	if start < 0 {
-		return 0
-	}
-	if start+height > total {
-		return total - height
-	}
-	return start
 }
 
 func effectiveNow(value time.Time) time.Time {

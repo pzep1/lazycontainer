@@ -250,6 +250,67 @@ func (r *RegistryLogin) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &r.Raw)
 }
 
+// SystemDNSDomain is one local DNS domain from `container system dns list`.
+// Apple's container CLI can register resolvable `*.test`-style domains for the
+// host — a capability Docker has no equivalent for. The JSON shape is
+// version-dependent, so the domain captures a raw object plus a string fallback.
+type SystemDNSDomain struct {
+	Name string         `json:"-"`
+	Raw  map[string]any `json:"-"`
+}
+
+func (d *SystemDNSDomain) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		d.Name = value
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	d.Raw = raw
+	d.Name = firstNonEmpty(
+		stringFromMap(raw, "domain"),
+		stringFromMap(raw, "name"),
+		stringFromMap(raw, "host"),
+		stringFromMap(raw, "hostname"),
+	)
+	return nil
+}
+
+// SystemProperty is one entry from `container system property list` — host-level
+// configuration for the container subsystem. Shape is version-dependent.
+type SystemProperty struct {
+	ID    string         `json:"-"`
+	Value string         `json:"-"`
+	Raw   map[string]any `json:"-"`
+}
+
+func (p *SystemProperty) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		p.ID = value
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	p.Raw = raw
+	p.ID = firstNonEmpty(
+		stringFromMap(raw, "id"),
+		stringFromMap(raw, "name"),
+		stringFromMap(raw, "key"),
+	)
+	p.Value = firstNonEmpty(
+		stringFromMap(raw, "value"),
+		stringFromMap(raw, "current"),
+		stringFromMap(raw, "default"),
+	)
+	return nil
+}
+
 type BuilderStatus struct {
 	ID            string         `json:"id"`
 	ContainerID   string         `json:"containerID"`

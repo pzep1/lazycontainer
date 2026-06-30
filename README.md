@@ -32,7 +32,8 @@ Requires macOS with Apple's [`container`](https://github.com/apple/container) CL
 │ web      running  2.1%  45MB ││ 12:07:01 server listening on :8080           │
 │ db       running  0.4%  60MB ││ 12:07:04 GET /   200  1ms                     │
 │ cache    stopped          -  ││ 12:07:06 GET /api 200 12ms                   │
-│   Images (6)                 ││ ▏following live — End re-attaches            │
+│   Services (2)               ││ ▏following live — End re-attaches            │
+│   Images (6)                 ││                                              │
 │   Builder (running)          ││                                              │
 │   Volumes (2)                ││                                              │
 │   Networks (1)               ││                                              │
@@ -49,25 +50,32 @@ main panel on the right tracks the selected item.
 
 ## Highlights
 
-- ⚡ **Live everything** — stream container, machine, and system logs in-pane with autoscroll, watch **CPU% and memory as live ASCII graphs**, and auto-refresh lists, stats, and status.
+- ⚡ **Live everything** — stream container, machine, and system logs in-pane with autoscroll, watch **CPU%, memory, network, and disk I/O as live ASCII graphs**, and auto-refresh lists, stats, and status. CPU% is derived from Apple's cumulative counters so you get a real live percentage, not a meaningless running total.
 - 🗂️ **Tabbed main panel** — flip a selected container between **Logs · Stats · Env · Config · Top · Inspect** with `[` / `]`; other resources get the tabs that fit them.
-- ⌨️ **Drive it from the keyboard** — start/stop/restart/kill containers, exec shells, copy & export filesystems, pull/build/tag/push/save/load images, and manage volumes, networks, machines, registries, and the builder.
-- 🧭 **Discoverable** — a context-aware **actions menu** (`space`), a scrollable **keybinding reference** (`?`), and **screen modes** (`+` / `_`: normal → half → fullscreen).
-- 🎨 **Yours to shape** — custom commands (flat or per-context, with interactive `attach`), theme/border/layout, log window, and refresh interval — all reloaded live when you edit the config.
+- ⌨️ **Drive it from the keyboard** — start/stop/restart/kill containers, exec shells, copy & export filesystems, pull/build/tag/push/save/load images, and manage volumes, networks, machines, registries, and the builder. Jump straight to any pane with `1`–`8`.
+- 🧩 **Compose without compose** — Apple's `container` CLI has no `compose`, so lazycontainer brings the **Services** panel anyway: drop a `compose.yaml` beside your project and bring services **up/down**, **start/stop/restart**, and **recreate** them — individually or the whole stack — straight from the TUI. lazycontainer translates each service into the right `container run`/`stop`/`delete` calls, in dependency order.
+- 📦 **Bulk actions** — a `B` menu to stop/kill/remove every container or prune images, volumes, and networks in one keystroke (with confirmation).
+- 🍎 **Apple-native extras** — view a container or machine's **VM boot logs** (`ctrl+b`), and see registered **local DNS domains** and **system properties** right in the System pane — things a Docker TUI can't show.
+- 🧭 **Discoverable** — a context-aware **actions menu** (`space`), a **bulk actions menu** (`B`), a scrollable **keybinding reference** (`?`), and **screen modes** (`+` / `_`: normal → half → fullscreen).
+- 🎨 **Yours to shape** — custom commands (flat or per-context, with interactive `attach`), an `ignore` list to hide noisy resources, theme/border/layout, log window, and refresh interval — all reloaded live when you edit the config.
 - 🖱️ **Mouse-friendly** — click panes and rows, scroll with the wheel, filter lists with `/`.
 
 <details>
 <summary><b>Full feature list</b></summary>
 
-- browse containers, images, volumes, networks, image builder status, machines, registry logins, and Apple container system diagnostics
-- switch the main panel between per-resource tabs (`[` / `]`)
+- browse containers, **compose services**, images, volumes, networks, image builder status, machines, registry logins, and Apple container system diagnostics
+- orchestrate a `compose.yaml` stack: bring services up/down, start/stop/restart, and recreate them — per service or whole-project — in dependency order, with no `docker compose` required
+- switch the main panel between per-resource tabs (`[` / `]`), or jump straight to a pane with `1`–`8`
 - stream container, machine, and system logs live with autoscroll, or follow them full screen
-- watch CPU% and memory as live ASCII graphs, plus a current CPU/memory/network/disk/PID summary
+- view a container's or machine's VM boot logs (`ctrl+b`)
+- watch CPU%, memory, network, and disk I/O as live ASCII graphs, plus a current CPU/memory/network/disk/PID summary — CPU% is derived live from Apple's cumulative `cpuUsageUsec` counter
 - view container environment variables and running processes (Env and Top tabs)
 - expand the main panel with screen modes: normal, half, fullscreen
-- context-aware actions menu and scrollable keybinding reference
+- context-aware actions menu, a bulk-actions menu (`B`), and a scrollable keybinding reference
+- run bulk actions: stop/kill/remove all containers, or prune unused images, volumes, and networks
+- see registered local DNS domains and system properties in the System pane
 - open a container's first published port in the browser
-- filter resource lists across names and metadata
+- filter resource lists across names and metadata, and hide noisy resources with a config `ignore` list
 - inspect selected resources (raw JSON)
 - scan container CPU and memory directly in the container list
 - run ad-hoc or named custom Apple `container` commands without leaving the TUI
@@ -112,10 +120,11 @@ Press `?` in the app for the same reference, scrollable. Press `space` for a men
 
 | Key | Action |
 | --- | --- |
-| `tab` / `shift+tab` | Switch resource pane (containers, images, builder, volumes, networks, machines, registries, system) |
+| `tab` / `shift+tab` | Switch resource pane (containers, services, images, builder, volumes, networks, machines, registries, system) |
+| `1`–`9` | Jump straight to a resource pane |
 | `[` / `]` | Previous / next main-panel tab |
 | `+` / `_` | Cycle screen mode: normal, half, fullscreen |
-| `space` | Open the context-aware actions menu |
+| `space` · `B` | Open the context-aware actions menu · bulk actions menu |
 | `/` · `esc` | Filter the list · clear filter or close command output |
 | `:` · `;` | Run an ad-hoc · named custom `container` command |
 | `o` · `r` · `u` | Open config in `$VISUAL`/`$EDITOR`/`vi` · refresh · toggle auto-refresh |
@@ -138,8 +147,24 @@ Press `?` in the app for the same reference, scrollable. Press `space` for a men
 | --- | --- |
 | `s` · `ctrl+r` · `x` · `K` | Start · restart · stop · kill |
 | `e` · `X` | Open `/bin/sh` · run a one-off command and show its output |
+| `ctrl+b` | View the container's VM boot logs |
 | `c` · `E` | Copy files `<src> <dest>` (`:/path` = selected container) · export filesystem to a tar |
 | `w` | Open the first published port in the browser |
+| `B` | Bulk actions: stop / kill / remove all containers |
+
+#### Services (compose)
+
+Drop a `compose.yaml` (or `docker-compose.yml`) beside your project — the **Services** pane lists its services with the state of the container backing each.
+
+| Key | Action |
+| --- | --- |
+| `u` · `U` | Up the selected service · up the whole project (dependency order) |
+| `d` · `D` | Down the service · down the whole project (with confirmation) |
+| `R` | Recreate the service (down, then up) |
+| `s` · `x` · `ctrl+r` | Start · stop · restart the service's container |
+| `l` · `e` · `i` | Stream logs · open a shell · inspect the service's container |
+
+> Services are translated into `container run` (with the service's ports, env, volumes, networks, and command), `stop`, and `delete` calls — Apple's CLI has no native compose, so lazycontainer does the orchestration. Build-only services are `container build`-tagged then run.
 
 #### Images
 
@@ -156,8 +181,9 @@ Press `?` in the app for the same reference, scrollable. Press `space` for a men
 | --- | --- |
 | `C` | Create a volume `<name> [size]` or network `<name> [subnet]` from its pane |
 | `M` · `m` · `S` | Create a machine `<image> [name]` · configure `cpus=4 memory=8G` · set default |
-| `e` | Open a shell in the selected machine |
+| `e` · `ctrl+b` | Open a shell in the selected machine · view its VM boot logs |
 | `g` | Log in to a registry `<server> [username]` |
+| `B` | Bulk actions: prune unused volumes or networks (volumes/networks pane) |
 
 #### Builder, system & shared
 
@@ -165,7 +191,9 @@ Press `?` in the app for the same reference, scrollable. Press `space` for a men
 | --- | --- |
 | `s` · `x` | Start / stop the builder or Apple container services |
 | `d` | Delete the selected resource, or log out of a registry — with confirmation |
-| `p` | Prune stopped containers or unused images, volumes, or networks — with confirmation |
+| `p` · `B` | Prune unused resources · bulk actions menu — with confirmation |
+
+> The System pane also surfaces Apple-native local DNS domains and `system property` settings alongside status, disk usage, and versions.
 
 > Destructive actions require a second confirmation key. In the Logs tab, output follows live and sticks to the bottom; scroll up (`pgup`, wheel) to detach autoscroll and press `end` to re-attach.
 
@@ -201,6 +229,7 @@ Beyond the flat `commands` list, the config accepts per-context custom commands,
   },
   "logs": { "tail": 200, "since": "5m" },
   "refreshIntervalMs": 5000,
+  "ignore": ["buildkit", "infra-"],
   "gui": {
     "sidePanelWidth": 0.3333,
     "screenMode": "normal",
@@ -216,6 +245,7 @@ Beyond the flat `commands` list, the config accepts per-context custom commands,
 | `attach` | `true` hands the terminal to the command (interactive shells) instead of capturing output. |
 | `logs.tail` / `logs.since` | Lines requested when a Logs tab opens · system-log window. |
 | `refreshIntervalMs` | Overrides the auto-refresh interval. |
+| `ignore` | Substrings; any container, image, volume, network, machine, or registry whose name (or, for containers, image) contains one is hidden from every list. |
 | `gui.sidePanelWidth` | Sidebar width as a fraction of the screen. |
 | `gui.screenMode` | Startup mode: `normal`, `half`, `fullscreen`. |
 | `gui.border` | `rounded`, `single`, `double`, or `hidden`. |

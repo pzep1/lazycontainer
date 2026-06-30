@@ -32,6 +32,31 @@ func (s SystemStatus) DetailLines(usage SystemDiskUsage, versions []SystemVersio
 	return lines
 }
 
+func (d SystemDNSDomain) Display() string {
+	if name := strings.TrimSpace(d.Name); name != "" {
+		return name
+	}
+	if len(d.Raw) > 0 {
+		return strings.Join(sortedMapLines(d.Raw), ", ")
+	}
+	return "-"
+}
+
+func (p SystemProperty) Display() string {
+	id := strings.TrimSpace(p.ID)
+	value := strings.TrimSpace(p.Value)
+	switch {
+	case id != "" && value != "":
+		return id + ": " + value
+	case id != "":
+		return id
+	case len(p.Raw) > 0:
+		return strings.Join(sortedMapLines(p.Raw), ", ")
+	default:
+		return "-"
+	}
+}
+
 func (u SystemDiskUsage) DetailLines() []string {
 	return []string{
 		diskUsageLine("  Containers", u.Containers),
