@@ -1,0 +1,26 @@
+#!/bin/sh
+# Release reminder + existing thermo-review pre-push hook.
+set -eu
+
+tmp="$(mktemp "${TMPDIR:-/tmp}/lazycontainer-pre-push.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+cat >"$tmp"
+
+if grep -Eq '^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+ ' "$tmp"; then
+  cat >&2 <<'MSG'
+lazycontainer release reminder:
+  - confirm Formula/lazycontainer.rb is bumped after the tag archive SHA is known
+  - confirm pzep1/homebrew-lazycont is bumped to the same version and SHA
+  - confirm the GitHub release exists or the release workflow will create it
+MSG
+fi
+
+command -v thermo-review >/dev/null 2>&1 || exit 0
+[ -n "${THERMO_REVIEW_SKIP:-}" ] && exit 0
+
+if [ -f "$HOME/.config/thermo-review/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.config/thermo-review/env"
+fi
+
+exec thermo-review hook run <"$tmp"
