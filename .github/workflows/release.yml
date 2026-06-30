@@ -9,10 +9,12 @@ name: Release
 # possible:
 #   1. preflight  — validate the tag, the tap credential and access, and
 #                   compute the archive sha256. No side effects.
-#   2. mutate     — open/update an in-tree formula bump PR and bump the tap repo
-#                   formula, using one canonical helper (.github/bump-formula.sh)
-#                   that asserts each file actually holds the new url + sha256
-#                   (failing loudly if a formula's shape has drifted).
+#   2. mutate     — push an in-tree formula bump branch (and open a PR when
+#                   repository settings allow Actions to do so) and bump the tap
+#                   repo formula, using one canonical helper
+#                   (.github/bump-formula.sh) that asserts each file actually
+#                   holds the new url + sha256 (failing loudly if a formula's
+#                   shape has drifted).
 #   3. publish    — create the GitHub Release last and idempotently.
 # Every mutation is rerunnable (a re-run is a no-op), so the only irreversible
 # step — publishing the release — happens after everything required succeeds.
@@ -94,7 +96,7 @@ jobs:
       # ---------------------------------------------------------------- #
       # Mutate: bump both formulae with the canonical helper.             #
       # ---------------------------------------------------------------- #
-      - name: Open in-tree formula bump PR
+      - name: Push in-tree formula bump branch
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.sha.outputs.version }}
@@ -121,12 +123,14 @@ jobs:
             echo "In-tree formula bump PR already open: #$pr_number"
             exit 0
           fi
-          gh pr create \
+          if ! gh pr create \
             --repo "$GITHUB_REPOSITORY" \
             --base main \
             --head "$branch" \
             --title "Bump in-tree Homebrew formula to v${VERSION}" \
-            --body "Updates Formula/lazycontainer.rb to v${VERSION} with SHA256 ${SHA256}."
+            --body "Updates Formula/lazycontainer.rb to v${VERSION} with SHA256 ${SHA256}."; then
+            echo "::warning::Formula bump branch '$branch' was pushed, but this repository does not allow GitHub Actions to create pull requests. Open the PR manually."
+          fi
 
       - name: Bump tap repo formula
         env:
