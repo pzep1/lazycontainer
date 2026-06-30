@@ -8,6 +8,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/pzep1/lazycont/internal/compose"
 )
 
 // tabFetchedMsg carries the result of an asynchronous fetch for a fetched tab
@@ -27,6 +29,8 @@ func tabsFor(kind resourceKind) []mainTab {
 	switch kind {
 	case resourceContainers:
 		return []mainTab{tabConfig, tabLogs, tabStats, tabEnv, tabPorts, tabMounts, tabHealth, tabTop, tabInspect}
+	case resourceServices:
+		return []mainTab{tabConfig, tabLogs, tabInspect}
 	case resourceImages, resourceVolumes, resourceNetworks:
 		return []mainTab{tabConfig, tabInspect}
 	case resourceMachines:
@@ -142,6 +146,13 @@ func (m Model) fetchTargetName() string {
 		if c, ok := m.selectedContainer(); ok {
 			return c.Name()
 		}
+	case resourceServices:
+		// Logs/Inspect for a service operate on its backing container.
+		if s, ok := m.selectedService(); ok {
+			if c, ok := m.serviceContainer(s); ok {
+				return c.Name()
+			}
+		}
 	case resourceImages:
 		if i, ok := m.selectedImage(); ok {
 			return i.Name()
@@ -233,7 +244,7 @@ func (m Model) fetchTabCmd(tab mainTab, key string) tea.Cmd {
 func (m Model) inspectFetch(kind resourceKind, name string) (string, string, error) {
 	ctx := context.Background()
 	switch kind {
-	case resourceContainers:
+	case resourceContainers, resourceServices:
 		body, err := m.client.InspectContainer(ctx, name)
 		return "Inspect " + name, body, err
 	case resourceImages:
@@ -304,6 +315,14 @@ func (m Model) tabContent(now time.Time) (string, string) {
 			}
 			return title, m.panelBody
 		}
+		// No fetch target (e.g. a service that has no container yet) would
+		// otherwise sit on "Loading…" forever, so explain the empty state.
+		if m.fetchTargetName() == "" {
+			if m.active == resourceServices {
+				return tab.label(), "No container yet — press u to bring the service up."
+			}
+			return tab.label(), "Nothing to " + strings.ToLower(tab.label()) + "."
+		}
 		return tab.label(), "Loading " + strings.ToLower(tab.label()) + "…"
 	}
 	return tab.label(), ""
@@ -319,6 +338,12 @@ func (m Model) configTabContent(now time.Time) (string, string) {
 			return "Config", "No container selected."
 		}
 		return "Config " + container.Name(), strings.Join(container.DetailLines(now), "\n")
+	case resourceServices:
+		service, ok := m.selectedService()
+		if !ok {
+			return "Config", m.emptyServiceMessage()
+		}
+		return "Config " + service.Name, strings.Join(m.serviceDetailLines(service), "\n")
 	case resourceImages:
 		image, ok := m.selectedImage()
 		if !ok {
@@ -358,10 +383,77 @@ func (m Model) configTabContent(now time.Time) (string, string) {
 		if !m.systemMatchesFilter() {
 			return "Config", "No system selected."
 		}
-		return "Config system", strings.Join(m.system.DetailLines(m.systemUsage, m.systemVersions), "\n")
+		return "Config system", strings.Join(m.systemDetailLines(), "\n")
 	default:
 		return "Config", ""
 	}
+}
+
+// systemDetailLines renders the System pane detail, appending Apple-native DNS
+// domains and subsystem properties when the CLI reports them.
+func (m Model) systemDetailLines() []string {
+	lines := m.system.DetailLines(m.systemUsage, m.systemVersions)
+	if len(m.systemDNS) > 0 {
+		lines = append(lines, "", "DNS domains")
+		for _, domain := range m.systemDNS {
+			lines = append(lines, "  "+domain.Display())
+		}
+	}
+	if len(m.systemProperties) > 0 {
+		lines = append(lines, "", "Properties")
+		for _, property := range m.systemProperties {
+			lines = append(lines, "  "+property.Display())
+		}
+	}
+	return lines
+}
+
+// serviceDetailLines renders a Compose service: its definition plus the state
+// of the container backing it.
+func (m Model) serviceDetailLines(service compose.Service) []string {
+	image := service.Image
+	if image == "" && service.Build != "" {
+		image = "build " + service.Build
+	}
+	if image == "" {
+		image = "—"
+	}
+	lines := []string{
+		"Service",
+		"  Name:      " + service.Name,
+		"  Image:     " + image,
+		"  Container: " + m.project.ContainerNameFor(service),
+		"  State:     " + m.serviceState(service),
+	}
+	if len(service.Ports) > 0 {
+		lines = append(lines, "  Ports:     "+strings.Join(service.Ports, ", "))
+	}
+	if len(service.Networks) > 0 {
+		lines = append(lines, "  Networks:  "+strings.Join(service.Networks, ", "))
+	}
+	if len(service.DependsOn) > 0 {
+		lines = append(lines, "  Depends:   "+strings.Join(service.DependsOn, ", "))
+	}
+	if len(service.Environment) > 0 {
+		lines = append(lines, "", "Environment")
+		for _, env := range service.Environment {
+			lines = append(lines, "  "+env)
+		}
+	}
+	if len(service.Volumes) > 0 {
+		lines = append(lines, "", "Volumes")
+		for _, volume := range service.Volumes {
+			lines = append(lines, "  "+volume)
+		}
+	}
+	if len(service.Command) > 0 {
+		lines = append(lines, "", "Command", "  "+strings.Join(service.Command, " "))
+	}
+	lines = append(lines, "", "Project: "+m.project.Name)
+	if m.project.File != "" {
+		lines = append(lines, "File:    "+m.project.File)
+	}
+	return lines
 }
 
 func (m Model) envTabContent() (string, string) {
@@ -419,25 +511,40 @@ func (m Model) statsTabContent() (string, string) {
 	samples := m.statHistoryForContainer(name)
 
 	var lines []string
-	if cpu, ok := historyValues(samples, func(s statHistorySample) (float64, bool) {
+	addGraph := func(caption string, scaleMax float64, format func(float64) string, valueFor func(statHistorySample) (float64, bool)) {
+		values, ok := historyValues(samples, valueFor)
+		if !ok {
+			return
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, graphSection(caption, values, width, graphHeight, scaleMax, format)...)
+	}
+	addGraph("CPU %", 100, formatPercentValue, func(s statHistorySample) (float64, bool) {
 		if s.hasCPU {
 			return s.cpuPercent, true
 		}
 		return 0, false
-	}); ok {
-		lines = append(lines, graphSection("CPU %", cpu, width, graphHeight, 100, formatPercentValue)...)
-	}
-	if mem, ok := historyValues(samples, func(s statHistorySample) (float64, bool) {
+	})
+	addGraph("Memory", 0, formatBytesValue, func(s statHistorySample) (float64, bool) {
 		if s.hasMemory {
 			return s.memoryBytes, true
 		}
 		return 0, false
-	}); ok {
-		if len(lines) > 0 {
-			lines = append(lines, "")
+	})
+	addGraph("Network", 0, formatRateValue, func(s statHistorySample) (float64, bool) {
+		if s.hasNetwork {
+			return s.networkRate, true
 		}
-		lines = append(lines, graphSection("Memory", mem, width, graphHeight, 0, formatBytesValue)...)
-	}
+		return 0, false
+	})
+	addGraph("Block IO", 0, formatRateValue, func(s statHistorySample) (float64, bool) {
+		if s.hasBlock {
+			return s.blockRate, true
+		}
+		return 0, false
+	})
 
 	if summary := m.currentStatSummary(name); len(summary) > 0 {
 		if len(lines) > 0 {
@@ -529,10 +636,14 @@ func (m Model) healthTabContent(now time.Time) (string, string) {
 }
 
 // currentStatSummary returns the current-value summary lines for a container's
-// most recent stats sample.
+// most recent stats sample, folding in the live (derived) CPU% when available.
 func (m Model) currentStatSummary(name string) []string {
+	derived, hasDerived := m.derivedCPUPercent(name)
 	for _, stat := range m.stats {
 		if statMatches(stat, name) {
+			if hasDerived {
+				stat = withDerivedCPU(stat, derived)
+			}
 			return stat.SummaryLines()
 		}
 	}

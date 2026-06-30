@@ -171,3 +171,12 @@ func formatBytesValue(v float64) string {
 	}
 	return containercli.FormatBytes(int64(v))
 }
+
+// formatRateValue renders a bytes-per-second throughput for the network and
+// block-IO graphs.
+func formatRateValue(v float64) string {
+	if v <= 0 {
+		return "0 B/s"
+	}
+	return containercli.FormatBytes(int64(v)) + "/s"
+}

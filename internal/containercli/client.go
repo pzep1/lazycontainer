@@ -60,6 +60,20 @@ func (c *Client) SystemVersion(ctx context.Context) ([]SystemVersion, error) {
 	return versions, err
 }
 
+// SystemDNS lists the local DNS domains registered with the container subsystem.
+func (c *Client) SystemDNS(ctx context.Context) ([]SystemDNSDomain, error) {
+	var domains []SystemDNSDomain
+	err := c.runJSON(ctx, &domains, "system", "dns", "list", "--format", "json")
+	return domains, err
+}
+
+// SystemProperties lists host-level container subsystem properties.
+func (c *Client) SystemProperties(ctx context.Context) ([]SystemProperty, error) {
+	var properties []SystemProperty
+	err := c.runJSON(ctx, &properties, "system", "property", "list", "--format", "json")
+	return properties, err
+}
+
 func (c *Client) Containers(ctx context.Context) ([]Container, error) {
 	var containers []Container
 	err := c.runJSON(ctx, &containers, "list", "--all", "--format", "json")
@@ -129,6 +143,33 @@ func (c *Client) FollowLogsCommand(id string, lines int) (*exec.Cmd, error) {
 		lines = 200
 	}
 	return exec.Command(c.binaryName(), "logs", "--follow", "-n", fmt.Sprintf("%d", lines), id), nil
+}
+
+// BootLogs returns a container's VM boot output via `container logs --boot`.
+// Apple runs each container in its own lightweight VM, so boot logs are a
+// per-container diagnostic with no Docker equivalent.
+func (c *Client) BootLogs(ctx context.Context, id string, lines int) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", errors.New("container id is required")
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	output, err := c.run(ctx, "logs", "--boot", "-n", fmt.Sprintf("%d", lines), id)
+	return string(output), err
+}
+
+// MachineBootLogs returns a machine VM's boot output via
+// `container machine logs --boot`.
+func (c *Client) MachineBootLogs(ctx context.Context, id string, lines int) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", errors.New("machine id is required")
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	output, err := c.run(ctx, "machine", "logs", "--boot", "-n", fmt.Sprintf("%d", lines), id)
+	return string(output), err
 }
 
 func (c *Client) MachineLogs(ctx context.Context, id string, lines int) (string, error) {
@@ -537,6 +578,29 @@ func (c *Client) StopMachine(ctx context.Context, id string) error {
 
 func (c *Client) Kill(ctx context.Context, id string) error {
 	_, err := c.run(ctx, "kill", id)
+	return err
+}
+
+// StopAll gracefully stops every running container via `container stop --all`.
+func (c *Client) StopAll(ctx context.Context) error {
+	_, err := c.runLong(ctx, "stop", "--all")
+	return err
+}
+
+// KillAll force-signals every running container via `container kill --all`.
+func (c *Client) KillAll(ctx context.Context) error {
+	_, err := c.run(ctx, "kill", "--all")
+	return err
+}
+
+// DeleteAllContainers removes every container via `container delete --all`,
+// adding --force so running containers are removed too.
+func (c *Client) DeleteAllContainers(ctx context.Context, force bool) error {
+	args := []string{"delete", "--all"}
+	if force {
+		args = append(args, "--force")
+	}
+	_, err := c.runLong(ctx, args...)
 	return err
 }
 

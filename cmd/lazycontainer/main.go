@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/pzep1/lazycont/internal/appmeta"
+	"github.com/pzep1/lazycont/internal/compose"
 	appconfig "github.com/pzep1/lazycont/internal/config"
 	"github.com/pzep1/lazycont/internal/containercli"
 	"github.com/pzep1/lazycont/internal/tui"
@@ -75,6 +76,7 @@ func runTUI(stderr io.Writer) int {
 	opts.LoadConfigCommands = loadConfigCommands
 	opts.ReloadConfig = reloadConfig
 	opts.OpenLinkCommand = openLinkCommand
+	opts.LoadProject = loadProject
 	program := tea.NewProgram(tui.NewWithOptions(client, opts), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", appmeta.Name, err)
@@ -113,6 +115,21 @@ func editorCommand(editor string, path string) (*exec.Cmd, error) {
 	}
 	args := append(append([]string(nil), parts[1:]...), path)
 	return exec.Command(parts[0], args...), nil
+}
+
+// loadProject discovers and parses a Compose file in the working directory so
+// the Services panel can orchestrate a multi-container stack. A missing file is
+// not an error (the panel shows an empty state); a parse failure is surfaced.
+func loadProject() (compose.Project, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return compose.Project{}, nil
+	}
+	path, ok := compose.Discover(dir)
+	if !ok {
+		return compose.Project{}, nil
+	}
+	return compose.Load(path)
 }
 
 func loadConfigCommands() ([]tui.CustomCommand, error) {
@@ -171,6 +188,7 @@ func applyConfigToOptions(opts *tui.Options, cfg appconfig.Config) {
 	opts.SelectedBgColor = cfg.GUI.Theme.SelectedLineBgColor
 	opts.LogsTail = cfg.Logs.Tail
 	opts.LogsSince = cfg.Logs.Since
+	opts.Ignore = append([]string(nil), cfg.Ignore...)
 	if cfg.RefreshIntervalMs > 0 {
 		opts.RefreshInterval = time.Duration(cfg.RefreshIntervalMs) * time.Millisecond
 	}

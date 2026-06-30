@@ -448,6 +448,31 @@ func TestCommandPreservesEmptyArguments(t *testing.T) {
 	}
 }
 
+func TestBulkContainerCommandsUseAllFlag(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(*Client) error
+		want []string
+	}{
+		{"StopAll", func(c *Client) error { return c.StopAll(context.Background()) }, []string{"stop", "--all"}},
+		{"KillAll", func(c *Client) error { return c.KillAll(context.Background()) }, []string{"kill", "--all"}},
+		{"DeleteAllForce", func(c *Client) error { return c.DeleteAllContainers(context.Background(), true) }, []string{"delete", "--all", "--force"}},
+		{"DeleteAll", func(c *Client) error { return c.DeleteAllContainers(context.Background(), false) }, []string{"delete", "--all"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			client := &Client{Binary: "container", Runner: runner, Timeout: time.Second, LongTimeout: time.Second}
+			if err := tc.run(client); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(runner.args, tc.want) {
+				t.Fatalf("args mismatch\nwant: %#v\n got: %#v", tc.want, runner.args)
+			}
+		})
+	}
+}
+
 func TestRegistryLoginCommandUsesServerAndOptionalUsername(t *testing.T) {
 	client := &Client{Binary: "container"}
 

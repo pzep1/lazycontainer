@@ -16,6 +16,9 @@ type Config struct {
 	GUI               GUI                  `json:"gui"`
 	Logs              Logs                 `json:"logs"`
 	RefreshIntervalMs int                  `json:"refreshIntervalMs"`
+	// Ignore hides any resource whose name contains one of these substrings,
+	// mirroring lazydocker's `ignore` list (e.g. to hide infra containers).
+	Ignore []string `json:"ignore"`
 }
 
 type Command struct {

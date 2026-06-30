@@ -1,9 +1,39 @@
 package containercli
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
+
+func TestSystemDNSDomainParsesStringAndObjectShapes(t *testing.T) {
+	var domains []SystemDNSDomain
+	if err := json.Unmarshal([]byte(`["test", {"domain": "myapp.test"}]`), &domains); err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 2 {
+		t.Fatalf("expected 2 domains, got %d", len(domains))
+	}
+	if got := domains[0].Display(); got != "test" {
+		t.Fatalf("string domain Display = %q, want test", got)
+	}
+	if got := domains[1].Display(); got != "myapp.test" {
+		t.Fatalf("object domain Display = %q, want myapp.test", got)
+	}
+}
+
+func TestSystemPropertyParsesObjectShape(t *testing.T) {
+	var properties []SystemProperty
+	if err := json.Unmarshal([]byte(`[{"id": "build.rosetta", "value": "true"}]`), &properties); err != nil {
+		t.Fatal(err)
+	}
+	if len(properties) != 1 {
+		t.Fatalf("expected 1 property, got %d", len(properties))
+	}
+	if got := properties[0].Display(); got != "build.rosetta: true" {
+		t.Fatalf("property Display = %q, want build.rosetta: true", got)
+	}
+}
 
 func TestFirstPublishedURL(t *testing.T) {
 	c := Container{Configuration: ContainerConfiguration{PublishedPorts: []Port{

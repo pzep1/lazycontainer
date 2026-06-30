@@ -11,65 +11,87 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/pzep1/lazycont/internal/compose"
 	"github.com/pzep1/lazycont/internal/containercli"
 )
 
 type fakeClient struct {
-	started         string
-	pulled          string
-	runImage        string
-	runOptions      containercli.ContainerLaunchOptions
-	createImage     string
-	createOptions   containercli.ContainerLaunchOptions
-	buildTag        string
-	buildContext    string
-	tagSource       string
-	tagTarget       string
-	pushed          string
-	savedImage      string
-	saveOutput      string
-	loadedImage     string
-	copySource      string
-	copyDest        string
-	exportID        string
-	exportOutput    string
-	restarted       string
-	followLogsID    string
-	followLogsCount int
-	logsRead        int
-	execID          string
-	execCommand     string
-	topID           string
-	commandArgs     []string
-	machineLogsID   string
-	machineLogsRead int
-	machineShellID  string
-	machineImage    string
-	machineName     string
-	machineSetID    string
-	machineSettings []string
-	defaultMachine  string
-	stoppedMachine  string
-	registryLogin   string
-	registryUser    string
-	registryLogout  string
-	builderStarted  bool
-	builderStopped  bool
-	builderDeleted  bool
-	systemLogsRead  bool
-	systemLogsCount int
-	systemFollowed  bool
-	systemStarted   bool
-	systemStopped   bool
-	deleted         string
-	createdVolume   string
-	volumeSize      string
-	createdNetwork  string
-	networkSubnet   string
-	deletedVolume   string
-	deletedNetwork  string
-	deletedMachine  string
-	pruned          string
+	started           string
+	pulled            string
+	runImage          string
+	runOptions        containercli.ContainerLaunchOptions
+	createImage       string
+	createOptions     containercli.ContainerLaunchOptions
+	buildTag          string
+	buildContext      string
+	tagSource         string
+	tagTarget         string
+	pushed            string
+	savedImage        string
+	saveOutput        string
+	loadedImage       string
+	copySource        string
+	copyDest          string
+	exportID          string
+	exportOutput      string
+	restarted         string
+	followLogsID      string
+	followLogsCount   int
+	logsRead          int
+	execID            string
+	execCommand       string
+	topID             string
+	commandArgs       []string
+	commandCalls      [][]string
+	machineLogsID     string
+	machineLogsRead   int
+	machineShellID    string
+	machineImage      string
+	machineName       string
+	machineSetID      string
+	machineSettings   []string
+	defaultMachine    string
+	stoppedMachine    string
+	registryLogin     string
+	registryUser      string
+	registryLogout    string
+	builderStarted    bool
+	builderStopped    bool
+	builderDeleted    bool
+	systemLogsRead    bool
+	systemLogsCount   int
+	systemFollowed    bool
+	systemStarted     bool
+	systemStopped     bool
+	deleted           string
+	createdVolume     string
+	volumeSize        string
+	createdNetwork    string
+	networkSubnet     string
+	deletedVolume     string
+	deletedNetwork    string
+	deletedMachine    string
+	pruned            string
+	bulkStopAll       bool
+	bulkKillAll       bool
+	bulkDeleteAll     bool
+	prunedImagesAll   bool
+	bootLogsID        string
+	machineBootLogsID string
+	systemDNS         []containercli.SystemDNSDomain
+	systemProperties  []containercli.SystemProperty
+	failSystemDNS     bool
+}
+
+func (f *fakeClient) SystemDNS(context.Context) ([]containercli.SystemDNSDomain, error) {
+	if f.failSystemDNS {
+		return nil, fmt.Errorf("dns unavailable")
+	}
+	return f.systemDNS, nil
+}
+
+func (f *fakeClient) SystemProperties(context.Context) ([]containercli.SystemProperty, error) {
+	return f.systemProperties, nil
 }
 
 func (f *fakeClient) SystemStatus(context.Context) (containercli.SystemStatus, error) {
@@ -268,6 +290,7 @@ func (f *fakeClient) Top(_ context.Context, id string) (string, error) {
 
 func (f *fakeClient) Command(_ context.Context, args []string) (string, error) {
 	f.commandArgs = append([]string(nil), args...)
+	f.commandCalls = append(f.commandCalls, append([]string(nil), args...))
 	return "command output\n", nil
 }
 
@@ -410,7 +433,32 @@ func (f *fakeClient) StopMachine(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeClient) BootLogs(_ context.Context, id string, _ int) (string, error) {
+	f.bootLogsID = id
+	return "vm boot: kernel started\nvm boot: init running", nil
+}
+
+func (f *fakeClient) MachineBootLogs(_ context.Context, id string, _ int) (string, error) {
+	f.machineBootLogsID = id
+	return "machine boot: kernel started", nil
+}
+
 func (f *fakeClient) Kill(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeClient) StopAll(context.Context) error {
+	f.bulkStopAll = true
+	return nil
+}
+
+func (f *fakeClient) KillAll(context.Context) error {
+	f.bulkKillAll = true
+	return nil
+}
+
+func (f *fakeClient) DeleteAllContainers(_ context.Context, _ bool) error {
+	f.bulkDeleteAll = true
 	return nil
 }
 
@@ -455,7 +503,10 @@ func (f *fakeClient) PruneContainers(context.Context) error {
 	return nil
 }
 
-func (f *fakeClient) PruneImages(context.Context, bool) error {
+func (f *fakeClient) PruneImages(_ context.Context, all bool) error {
+	if all {
+		f.prunedImagesAll = true
+	}
 	return nil
 }
 
@@ -555,7 +606,7 @@ func TestNumberKeyFocusesResourceSection(t *testing.T) {
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
 	updated, _ = updated.Update(msg)
 
-	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	if cmd != nil {
 		t.Fatalf("expected no command")
 	}
@@ -720,6 +771,334 @@ func TestContainerDetailsShowMetricHistory(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view did not include %q:\n%s", want, view)
 		}
+	}
+}
+
+// TestDerivesLiveCPUPercentFromCumulativeUsec verifies the headline fix: Apple's
+// `container stats` reports a cumulative cpuUsageUsec counter (no ready
+// percentage), so a live CPU% must be differenced from successive samples and
+// surfaced in the list, the current summary, and the CPU% graph.
+func TestDerivesLiveCPUPercentFromCumulativeUsec(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 130, Height: 64})
+	base := time.Unix(1_700_000_000, 0)
+
+	// cpuUsageUsec rises 1.0s of CPU time over 2s wall (50%), then 0.6s over 2s
+	// (30%); networkRx/Tx and blockRead/Write climb so throughput is derivable.
+	sample := func(at time.Time, cpuUsec, net, blk float64) tea.Msg {
+		return snapshotMsg{
+			updated: at,
+			system:  containercli.SystemStatus{Status: "running"},
+			containers: []containercli.Container{
+				testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+			},
+			stats: []containercli.Stat{{
+				"id":               "web",
+				"cpuUsageUsec":     cpuUsec,
+				"memoryUsageBytes": float64(52428800),  // 50 MB
+				"memoryLimitBytes": float64(104857600), // 100 MB
+				"networkRxBytes":   net,
+				"networkTxBytes":   float64(0),
+				"blockReadBytes":   blk,
+				"blockWriteBytes":  float64(0),
+				"numProcesses":     float64(3),
+			}},
+		}
+	}
+
+	updated, _ = updated.Update(sample(base, 1_000_000, 0, 0))
+	updated, _ = updated.Update(sample(base.Add(2*time.Second), 2_000_000, 500_000, 400_000))
+	updated, _ = updated.Update(sample(base.Add(4*time.Second), 2_600_000, 900_000, 600_000))
+
+	// The container list row shows the derived live percentage, not raw usec.
+	listView := updated.View()
+	for _, want := range []string{"30.0% cpu", "50.0% mem"} {
+		if !strings.Contains(listView, want) {
+			t.Fatalf("list view did not include derived %q:\n%s", want, listView)
+		}
+	}
+	if strings.Contains(listView, "cpu time") || strings.Contains(listView, "CPU time") {
+		t.Fatalf("list should show derived CPU%%, not cumulative CPU time:\n%s", listView)
+	}
+
+	// The Stats tab renders CPU%, Network, and Block IO graphs plus a live
+	// "Current" CPU summary line.
+	statsView := withTab(updated.(Model), resourceContainers, tabStats).View()
+	for _, want := range []string{"CPU %", "cur 30.0%", "Network", "Block IO", "Current", "CPU:"} {
+		if !strings.Contains(statsView, want) {
+			t.Fatalf("stats view did not include %q:\n%s", want, statsView)
+		}
+	}
+	if strings.Contains(statsView, "CPU time:") {
+		t.Fatalf("stats summary should show live CPU%%, not cumulative CPU time:\n%s", statsView)
+	}
+}
+
+func TestBootLogsShowVMOutput(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+		},
+	})
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	if cmd == nil {
+		t.Fatalf("expected a boot-logs command")
+	}
+	updated, _ = updated.Update(cmd().(outputMsg))
+	if client.bootLogsID != "web" {
+		t.Fatalf("expected boot logs for web, got %q", client.bootLogsID)
+	}
+	if view := updated.View(); !strings.Contains(view, "Boot logs web") || !strings.Contains(view, "kernel started") {
+		t.Fatalf("boot logs not displayed:\n%s", view)
+	}
+}
+
+func TestSystemPaneShowsDNSAndProperties(t *testing.T) {
+	client := &fakeClient{
+		systemDNS:        []containercli.SystemDNSDomain{{Name: "myapp.test"}},
+		systemProperties: []containercli.SystemProperty{{ID: "build.rosetta", Value: "true"}},
+	}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	updated, _ = updated.Update(model.refreshCmd()().(snapshotMsg))
+
+	// Jump to the System pane and read its detail.
+	view := switchToResource(t, updated, resourceSystem).View()
+	for _, want := range []string{"DNS domains", "myapp.test", "Properties", "build.rosetta: true"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("system detail did not include %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestIgnoreListHidesMatchingResources(t *testing.T) {
+	model := NewWithOptions(&fakeClient{}, Options{Ignore: []string{"infra"}})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(snapshotMsg{
+		system: containercli.SystemStatus{Status: "running"},
+		containers: []containercli.Container{
+			testContainerWithState("web", "docker.io/library/nginx:latest", "running"),
+			testContainerWithState("infra-proxy", "docker.io/library/envoy:latest", "running"),
+		},
+	})
+
+	state := updated.(Model)
+	if got := state.activeVisibleCount(); got != 1 {
+		t.Fatalf("expected ignore to hide 1 of 2 containers, visible=%d", got)
+	}
+	view := state.View()
+	if !strings.Contains(view, "web") {
+		t.Fatalf("expected web container visible:\n%s", view)
+	}
+	if strings.Contains(view, "infra-proxy") {
+		t.Fatalf("expected infra-proxy hidden by ignore list:\n%s", view)
+	}
+}
+
+func TestNumberKeysJumpToResourcePane(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(model.refreshCmd()().(snapshotMsg))
+
+	cases := []struct {
+		key  rune
+		want resourceKind
+	}{
+		{'2', resourceServices},
+		{'3', resourceImages},
+		{'5', resourceVolumes},
+		{'7', resourceMachines},
+		{'9', resourceSystem},
+		{'1', resourceContainers},
+	}
+	for _, tc := range cases {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+		if got := updated.(Model).active; got != tc.want {
+			t.Fatalf("key %q: active = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
+// TestDerivationPrefersCumulativeUsecOverZeroFilledPercent guards against a
+// runtime that emits a literal cpuPercent:0 alongside a rising cpuUsageUsec —
+// the cumulative counter must win so a busy container isn't pinned to 0%.
+func TestDerivationPrefersCumulativeUsecOverZeroFilledPercent(t *testing.T) {
+	model := New(&fakeClient{})
+	base := time.Unix(1_700_000_000, 0)
+	model.recordStatHistory([]containercli.Stat{{
+		"id": "web", "cpuPercent": float64(0), "cpuUsageUsec": float64(1_000_000),
+	}}, base)
+	model.recordStatHistory([]containercli.Stat{{
+		"id": "web", "cpuPercent": float64(0), "cpuUsageUsec": float64(2_000_000),
+	}}, base.Add(2*time.Second))
+
+	pct, ok := model.derivedCPUPercent("web")
+	if !ok || pct < 49 || pct > 51 {
+		t.Fatalf("expected ~50%% derived from usec despite cpuPercent:0, got %v ok=%v", pct, ok)
+	}
+}
+
+// TestDerivationSkipsTinyIntervals guards against rapid back-to-back refreshes
+// (e.g. an auto-refresh immediately followed by `r`) spiking CPU% by dividing a
+// counter delta by a near-zero elapsed time.
+func TestDerivationSkipsTinyIntervals(t *testing.T) {
+	model := New(&fakeClient{})
+	base := time.Unix(1_700_000_000, 0)
+	model.recordStatHistory([]containercli.Stat{{"id": "web", "cpuUsageUsec": float64(1_000_000)}}, base)
+	// 20ms later with a large delta — must NOT produce a derived percentage.
+	model.recordStatHistory([]containercli.Stat{{"id": "web", "cpuUsageUsec": float64(1_500_000)}}, base.Add(20*time.Millisecond))
+	if pct, ok := model.derivedCPUPercent("web"); ok {
+		t.Fatalf("expected no derived CPU%% for a sub-0.5s interval, got %v", pct)
+	}
+
+	// A full interval against the stored sample derives normally (Δ1e6 / 2s = 50%).
+	model.recordStatHistory([]containercli.Stat{{"id": "web", "cpuUsageUsec": float64(2_500_000)}}, base.Add(2020*time.Millisecond))
+	pct, ok := model.derivedCPUPercent("web")
+	if !ok || pct < 49 || pct > 51 {
+		t.Fatalf("expected ~50%% after a full interval, got %v ok=%v", pct, ok)
+	}
+}
+
+// TestSystemDNSPreservedOnTransientError verifies a failed best-effort DNS fetch
+// keeps the last-known domains instead of blanking the System pane.
+func TestSystemDNSPreservedOnTransientError(t *testing.T) {
+	client := &fakeClient{systemDNS: []containercli.SystemDNSDomain{{Name: "myapp.test"}}}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	updated, _ = updated.Update(model.refreshCmd()().(snapshotMsg))
+	if got := len(updated.(Model).systemDNS); got != 1 {
+		t.Fatalf("expected 1 DNS domain after first refresh, got %d", got)
+	}
+
+	// Next refresh fails the DNS fetch; the previously-known domain must remain.
+	client.failSystemDNS = true
+	updated, _ = updated.Update(updated.(Model).refreshCmd()().(snapshotMsg))
+	state := updated.(Model)
+	if got := len(state.systemDNS); got != 1 {
+		t.Fatalf("expected DNS domain preserved on transient error, got %d", got)
+	}
+	if !strings.Contains(switchToSystemView(t, state), "myapp.test") {
+		t.Fatalf("expected myapp.test still visible after transient error")
+	}
+}
+
+func switchToSystemView(t *testing.T, state Model) string {
+	t.Helper()
+	return switchToResource(t, state, resourceSystem).View()
+}
+
+func composeTestProject() compose.Project {
+	return compose.Project{
+		Name: "shop",
+		File: "compose.yaml",
+		Services: []compose.Service{
+			{Name: "web", Image: "nginx:latest", Ports: []string{"8080:80"}},
+			{Name: "db", Image: "postgres:17"},
+		},
+	}
+}
+
+func TestServicesPaneListsServicesWithState(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{LoadProject: func() (compose.Project, error) {
+		return composeTestProject(), nil
+	}})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	// db's container is running; web has none yet.
+	updated, _ = updated.Update(snapshotMsg{
+		system:     containercli.SystemStatus{Status: "running"},
+		project:    composeTestProject(),
+		containers: []containercli.Container{testContainerWithState("shop-db", "postgres:17", "running")},
+	})
+
+	view := switchToResource(t, updated, resourceServices).View()
+	for _, want := range []string{"Services", "web", "db", "running"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("services pane missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestServicesPaneEmptyStateWhenNoComposeFile(t *testing.T) {
+	model := New(&fakeClient{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}})
+	view := switchToResource(t, updated, resourceServices).View()
+	if !strings.Contains(view, "No compose.yaml found") {
+		t.Fatalf("expected empty-state guidance:\n%s", view)
+	}
+}
+
+func TestServiceInspectWithoutContainerShowsEmptyState(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{LoadProject: func() (compose.Project, error) {
+		return composeTestProject(), nil
+	}})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	// No containers exist for any service.
+	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}, project: composeTestProject()})
+	updated = switchToResource(t, updated, resourceServices)
+
+	// Open the Inspect tab for a service with no backing container.
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	view := updated.View()
+	if !strings.Contains(view, "No container yet") {
+		t.Fatalf("expected empty-state message, not a perpetual Loading:\n%s", view)
+	}
+	if strings.Contains(view, "Loading inspect") {
+		t.Fatalf("inspect should not hang on Loading for a containerless service:\n%s", view)
+	}
+}
+
+func TestUpServiceRunsContainerRun(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{LoadProject: func() (compose.Project, error) {
+		return composeTestProject(), nil
+	}})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}, project: composeTestProject()})
+	updated = switchToResource(t, updated, resourceServices)
+
+	// Cursor starts on "web"; press u to bring it up.
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	if cmd == nil {
+		t.Fatalf("expected an up command")
+	}
+	updated.Update(cmd().(actionDoneMsg))
+
+	want := []string{"run", "--detach", "--name", "shop-web", "--publish", "8080:80", "nginx:latest"}
+	if !reflect.DeepEqual(client.commandArgs, want) {
+		t.Fatalf("up service command mismatch\nwant: %#v\n got: %#v", want, client.commandArgs)
+	}
+}
+
+func TestDownServiceRequiresConfirmationThenStopsAndRemoves(t *testing.T) {
+	client := &fakeClient{}
+	model := NewWithOptions(client, Options{LoadProject: func() (compose.Project, error) {
+		return composeTestProject(), nil
+	}})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}, project: composeTestProject()})
+	updated = switchToResource(t, updated, resourceServices)
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if len(client.commandCalls) != 0 {
+		t.Fatalf("down ran before confirmation: %#v", client.commandCalls)
+	}
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected confirmation command")
+	}
+	updated.Update(cmd().(actionDoneMsg))
+
+	want := [][]string{{"stop", "shop-web"}, {"delete", "--force", "shop-web"}}
+	if !reflect.DeepEqual(client.commandCalls, want) {
+		t.Fatalf("down service commands mismatch\nwant: %#v\n got: %#v", want, client.commandCalls)
 	}
 }
 
@@ -914,11 +1293,12 @@ func TestActionErrorKeepsCachedTabContent(t *testing.T) {
 
 func TestStatHistoryIsBounded(t *testing.T) {
 	model := New(&fakeClient{})
+	base := time.Unix(1_700_000_000, 0)
 	for idx := 0; idx < maxStatHistorySamples+5; idx++ {
 		model.recordStatHistory([]containercli.Stat{{
 			"id":         "web",
 			"cpuPercent": float64(idx),
-		}})
+		}}, base.Add(time.Duration(idx)*time.Second))
 	}
 
 	if got := len(model.statHistory["web"]); got != maxStatHistorySamples {
@@ -953,7 +1333,7 @@ func TestImageDetailsShowLayerHistory(t *testing.T) {
 			}},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 
 	view := updated.View()
 	for _, want := range []string{"Layer history", "linux/arm64/v8", "375591c23c8d", "metadata", "CMD [\"/bin/sh\"]"} {
@@ -1123,6 +1503,55 @@ func TestPruneContainersRequiresConfirmation(t *testing.T) {
 
 	if client.pruned != "containers" {
 		t.Fatalf("expected confirmed container prune, got %q", client.pruned)
+	}
+}
+
+func TestBulkMenuStopAllRequiresConfirmation(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(model.refreshCmd()().(snapshotMsg))
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	if view := updated.View(); !strings.Contains(view, "Bulk container actions") || !strings.Contains(view, "Stop all containers") {
+		t.Fatalf("bulk menu not shown:\n%s", view)
+	}
+
+	// Selecting the first item arms a confirmation but must not run yet.
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if client.bulkStopAll {
+		t.Fatalf("stop-all ran before confirmation")
+	}
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected confirmation command")
+	}
+	updated.Update(cmd().(actionDoneMsg))
+	if !client.bulkStopAll {
+		t.Fatalf("expected StopAll after confirmation")
+	}
+}
+
+func TestBulkMenuRemoveAllContainersForce(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.Update(model.refreshCmd()().(snapshotMsg))
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	// Move to "Remove ALL containers (force)" (4th item) and run it.
+	for i := 0; i < 3; i++ {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatalf("expected confirmation command")
+	}
+	updated.Update(cmd().(actionDoneMsg))
+	if !client.bulkDeleteAll {
+		t.Fatalf("expected DeleteAllContainers after confirmation")
 	}
 }
 
@@ -1389,7 +1818,7 @@ func TestCustomCommandExpandsActiveResourcePlaceholder(t *testing.T) {
 			Configuration: containercli.ImageConfiguration{Name: "docker.io/library/postgres:17"},
 		}},
 	})
-	updated = switchTabs(t, updated, 1)
+	updated = switchToResource(t, updated, resourceImages)
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{';'}})
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1969,7 +2398,7 @@ func TestRunSelectedImagePromptsForLaunchOptions(t *testing.T) {
 			},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	for _, r := range `name=web p=127.0.0.1:8080:80 env=APP_ENV=dev v=cache:/cache network=frontend -- npm start` {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -2018,7 +2447,7 @@ func TestCreateContainerFromSelectedImagePromptsForLaunchOptions(t *testing.T) {
 			},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
 	for _, r := range `--name worker --env "GREETING=hello world" -- /bin/sh -lc "echo ready"` {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -2059,7 +2488,7 @@ func TestCreateContainerStillAcceptsBareName(t *testing.T) {
 			},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
 	for _, r := range "scratch" {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -2165,7 +2594,7 @@ func TestTagSelectedImagePromptsForTargetReference(t *testing.T) {
 			},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	for _, r := range "registry.example.com/alpine:dev" {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -2201,7 +2630,7 @@ func TestPushSelectedImageUsesImageReference(t *testing.T) {
 			},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'P'}})
 	if cmd == nil {
 		t.Fatalf("expected push image command")
@@ -2233,7 +2662,7 @@ func TestSaveSelectedImageUsesDefaultArchivePath(t *testing.T) {
 			},
 		}},
 	})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
 	if cmd != nil {
 		t.Fatalf("expected save prompt, got command")
@@ -2264,7 +2693,7 @@ func TestLoadImageArchivePromptUsesInputPath(t *testing.T) {
 	model := New(client)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 24})
 	updated, _ = updated.Update(snapshotMsg{system: containercli.SystemStatus{Status: "running"}})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = switchToResource(t, updated, resourceImages)
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
 	for _, r := range "./archives/alpine.tar" {
 		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -2434,43 +2863,47 @@ func TestCreateNetworkPromptUsesNameAndOptionalSubnet(t *testing.T) {
 
 func switchToBuilder(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
-	return switchTabs(t, model, 2)
+	return switchToResource(t, model, resourceBuilder)
 }
 
 func switchToVolumes(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
-	return switchTabs(t, model, 3)
+	return switchToResource(t, model, resourceVolumes)
 }
 
 func switchToNetworks(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
-	return switchTabs(t, model, 4)
+	return switchToResource(t, model, resourceNetworks)
 }
 
 func switchToMachines(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
-	return switchTabs(t, model, 5)
+	return switchToResource(t, model, resourceMachines)
 }
 
 func switchToRegistries(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
-	return switchTabs(t, model, 6)
+	return switchToResource(t, model, resourceRegistries)
 }
 
 func switchToSystem(t *testing.T, model tea.Model) tea.Model {
 	t.Helper()
-	return switchTabs(t, model, 7)
+	return switchToResource(t, model, resourceSystem)
 }
 
-func switchTabs(t *testing.T, model tea.Model, count int) tea.Model {
+// switchToResource tabs forward until the target pane is focused, so tests stay
+// correct regardless of pane ordering.
+func switchToResource(t *testing.T, model tea.Model, kind resourceKind) tea.Model {
 	t.Helper()
 	updated := model
-	for range count {
-		var cmd tea.Cmd
-		updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
-		if cmd != nil {
-			t.Fatalf("expected no command while tabbing")
+	for i := 0; i < int(resourceCount); i++ {
+		if updated.(Model).active == kind {
+			return updated
 		}
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	if updated.(Model).active != kind {
+		t.Fatalf("could not switch to resource %d", kind)
 	}
 	return updated
 }

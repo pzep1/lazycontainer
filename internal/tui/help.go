@@ -17,8 +17,8 @@ func helpLines() []string {
 	}{
 		{"Global", [][2]string{
 			{"tab / shift+tab", "switch resource pane"},
-			{"←/→ or h / tab", "previous / next resource pane"},
-			{"1-8", "jump to resource pane"},
+			{"←/→ or h", "previous / next resource pane"},
+			{"1-9", "jump to resource pane"},
 			{"[ / ]", "previous / next main-panel tab"},
 			{"+ / _", "cycle screen mode (normal/half/fullscreen)"},
 			{"/", "filter list"},
@@ -29,6 +29,7 @@ func helpLines() []string {
 			{"r", "refresh"},
 			{"u", "toggle auto-refresh"},
 			{"space", "open actions menu"},
+			{"B", "open bulk actions menu"},
 			{"?", "toggle this help"},
 			{"q / ctrl+c", "quit"},
 		}},
@@ -42,13 +43,21 @@ func helpLines() []string {
 			{"i / enter", "Inspect tab"},
 			{"l", "Logs tab (live stream)"},
 			{"f", "follow logs full-screen"},
+			{"ctrl+b", "VM boot logs (containers, machines)"},
 		}},
 		{"Containers", [][2]string{
 			{"s x ctrl+r K", "start / stop / restart / kill"},
 			{"e X", "exec shell / run command"},
 			{"c E", "copy files / export filesystem"},
 			{"w", "open first port in browser"},
-			{"d p", "delete / prune stopped"},
+			{"d p B", "delete / prune stopped / bulk actions"},
+		}},
+		{"Services (compose)", [][2]string{
+			{"u U", "up service / up whole project"},
+			{"d D", "down service / down whole project"},
+			{"R", "recreate service (down + up)"},
+			{"s x ctrl+r", "start / stop / restart its container"},
+			{"l e i", "logs / shell / inspect its container"},
 		}},
 		{"Images", [][2]string{
 			{"a b", "pull / build"},
